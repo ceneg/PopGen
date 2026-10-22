@@ -7,8 +7,9 @@ recombination.py looks for Phi there first, so the virtual environment does
 not need to be activated.
 
 The source archive (PhiPack 1.1, Bruen et al. 2006) is downloaded from the
-authors' site or, if that fails, from the Galaxy depot mirror used by
-bioconda, and checked against the SHA-256 checksum of the bioconda recipe.
+Galaxy depot mirror used by bioconda or, if that fails, from the authors'
+site (which refuses many automated downloads), and checked against the
+SHA-256 checksum of the bioconda recipe.
 With ``--source`` a local copy of the archive is used instead (no download).
 
 Requires a C compiler (``cc``, e.g. gcc or clang).
@@ -31,9 +32,10 @@ log = logging.getLogger("install_phipack")
 
 VERSION = "1.1"
 SHA256 = "af43326e021f1f2e590be2cba3caa44a0963f237386e63209ccc26b5bfb02db9"
+AUTHORS_URL = "https://www.maths.otago.ac.nz/~dbryant/software/PhiPack.tar.gz"
 URLS = (
-    "https://www.maths.otago.ac.nz/~dbryant/software/PhiPack.tar.gz",
     "https://depot.galaxyproject.org/software/phipack/phipack_1.1_src_all.tar.gz",
+    AUTHORS_URL,
 )
 # C sources of the Phi program (PhiPack's Makefile, target Phi)
 PHI_SOURCES = (
@@ -65,7 +67,7 @@ def download(urls: tuple[str, ...] = URLS, sha256: str = SHA256) -> bytes:
             log.warning(f"  {e}")
     raise RuntimeError(
         "Could not download a verified PhiPack archive. Download it yourself "
-        f"(e.g. {URLS[0]}) and run this script with --source <file>."
+        f"(e.g. {AUTHORS_URL}) and run this script with --source <file>."
     )
 
 

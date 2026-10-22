@@ -61,7 +61,7 @@ python3 -m venv .venv
 ```
 
 `tools/install_phipack.py` downloads the PhiPack source code (from the
-authors' site, or the bioconda mirror if that fails), verifies its SHA-256
+bioconda mirror, or the authors' site if that fails), verifies its SHA-256
 checksum, compiles the `Phi` program and puts it into `.venv/bin/`. If the
 download fails, download `PhiPack.tar.gz` yourself and run
 `.venv/bin/python tools/install_phipack.py --source PhiPack.tar.gz`. PhiPack
