@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.01 (2026-10-22)
+
+* `requirements.txt` pins pyparsing 3.2.3; newer versions emit deprecation
+  warnings through matplotlib 3.10.3 and may later stop working with it.
+* `tools/install_phipack.py` downloads PhiPack from the bioconda mirror first
+  and from the authors' site only if that fails (the authors' site refuses
+  many automated downloads).
+
 ## 1.00 (2026-10-22)
 
 First public release.

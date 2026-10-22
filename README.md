@@ -1,6 +1,6 @@
 # PopGen: population-genomic analyses of SNP data
 
-[![Version](https://img.shields.io/badge/version-1.00-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.01-blue.svg)](CHANGELOG.md)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](requirements.txt)
 
@@ -218,7 +218,7 @@ CHANGELOG.md  release notes
 
 The article that describes this software has not been published yet; its
 reference will be added here on publication. Until then, please cite the
-repository, PopGen version 1.00 (see [CITATION.cff](CITATION.cff); GitHub
+repository, PopGen (the version you used) (see [CITATION.cff](CITATION.cff); GitHub
 shows a ready-made citation under "Cite this repository"). Please also cite the methods and the
 software the scripts rely on, in particular scikit-allel, scikit-learn,
 SciPy, NetworkX, statsmodels, Biopython and PhiPack (Bruen et al. 2006,

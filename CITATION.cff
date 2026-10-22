@@ -8,7 +8,7 @@ type: software
 authors:
   - family-names: Gostinčar
     given-names: Cene
-version: "1.00"
+version: "1.01"
 date-released: "2026-10-22"
 repository-code: "https://github.com/ceneg/PopGen"
 license: MIT
