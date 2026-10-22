@@ -11,6 +11,7 @@ biopython==1.85
 networkx==3.5
 statsmodels==0.14.4
 matplotlib==3.10.3
+pyparsing==3.2.3  # newer versions deprecate names matplotlib 3.10.3 uses
 seaborn==0.13.2
 psutil==7.0.0
 pytest==9.0.2
