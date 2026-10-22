@@ -1,0 +1,39 @@
+# Input data and outputs (keep research data out of the repository)
+/data/
+/results/
+/logs/
+/example_run/
+*.vcf
+*.vcf.gz
+*.fna
+*.fa
+*.fasta
+*.gff
+*.gff3
+!examples/data/*
+
+# Private notes, superseded scripts and local agent configuration
+/private/
+/memory.md
+/AGENTS.md
+/CLAUDE.md
+/.claude/
+/.agents/
+/.githooks/
+# Integration test against the local (unpublished) dataset
+/tests/test_integration.py
+# Methods text (kept for the accompanying article, not published here)
+/docs/methods.md
+
+# Python and tooling
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+.env
+*.egg-info/
+.ipynb_checkpoints/
+.vscode/
+.idea/
+.DS_Store

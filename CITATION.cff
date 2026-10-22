@@ -1,0 +1,22 @@
+cff-version: 1.2.0
+message: >-
+  If you use this software, please cite it as below. The article that
+  describes it has not been published yet; its reference will be added here
+  on publication.
+title: "PopGen: population-genomic analyses of SNP data"
+type: software
+authors:
+  - family-names: Gostinčar
+    given-names: Cene
+version: "1.00"
+date-released: "2026-10-22"
+repository-code: "https://github.com/ceneg/PopGen"
+license: MIT
+keywords:
+  - population genomics
+  - SNP
+  - VCF
+  - haploid
+  - dN/dS
+  - linkage disequilibrium
+  - recombination

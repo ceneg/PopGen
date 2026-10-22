@@ -1,0 +1,8 @@
+# Tool configuration only: the scripts run from a checkout and are not an
+# installable package (see README.md for installation).
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "slow: long-running test on a local real dataset (skipped when absent)",
+]
