@@ -169,13 +169,16 @@ decay plot; the half-decay distance is logged.
 ### selection.py
 
 ```bash
-python scripts/selection.py --vcf VCF --gff GFF --fasta FASTA --nwk TREE.nwk --out PREFIX
+python scripts/selection.py --vcf VCF --gff GFF --fasta FASTA --nwk TREE.nwk --out PREFIX [--jobs N]
 ```
 
 The tree can be the `upgma.nwk` from `structure.py`. Writes per-gene values for
 genes that differ from the reference (`PREFIX.tsv`), genome-wide values per
 sample (`PREFIX.summary.tsv`: dN, dS, dN/dS, pN, pS and the underlying counts)
-and the tree annotated with dN, dS and dN/dS. Uses all CPU cores but one.
+and the tree annotated with dN, dS and dN/dS (`PREFIX.dS.tree.png`,
+`PREFIX.dN.tree.png`, `PREFIX.dN_dS.tree.png` and `.svg`), drawn as given in the
+Newick file. dN/dS is `inf` when dS = 0 < dN and NaN when both are 0. `--jobs`
+sets the number of worker processes (default: available CPU cores but one).
 
 ### recombination.py
 

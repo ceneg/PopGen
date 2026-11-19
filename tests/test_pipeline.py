@@ -79,7 +79,7 @@ def test_selection_neutral_mutations(outdir):
     assert len(summary) == 24
     # Simulated SNPs are random (neutral) changes: dN/dS should be near 1
     assert 0.6 < summary["dN/dS"].median() < 1.6
-    assert (tmp / "results" / "png" / "sel.dN_dS.upgma.png").exists()
+    assert (tmp / "results" / "png" / "sel.dN_dS.tree.png").exists()
 
 
 @pytest.mark.skipif(find_phi() is None, reason="PhiPack (Phi) not installed")

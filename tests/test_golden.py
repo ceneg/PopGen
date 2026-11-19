@@ -43,7 +43,7 @@ FIGURES = [
     "div.ss.lineage",
     "net.lineage.msn",
     "ld.ld_decay",
-    "sel.dN_dS.upgma",
+    "sel.dN_dS.tree",
 ]
 REC_TABLE = "rec.phi.contigs.tsv"
 # Permutation p-values are random; only these columns are deterministic

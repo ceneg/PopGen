@@ -8,6 +8,7 @@ from popgen.dnds import (
     calculate_pairwise_dnds,
     count_differences,
     count_site_types,
+    dnds_ratio,
     get_codon_table,
 )
 
@@ -128,3 +129,49 @@ def test_count_differences_three_positions():
     sd, nd = count_differences("TTT", "GGG", table)
     assert sd == pytest.approx(0.5)
     assert nd == pytest.approx(2.5)
+
+
+def test_stop_codon_pair_is_skipped():
+    """T-DNDS-1 (B14): Trp -> stop contributes no sites and no differences."""
+    pn, ps, nd, sd, n_sites, s_sites = calculate_pairwise_dnds("TGGCCT", "TGACCC")
+    assert n_sites + s_sites == pytest.approx(3)  # only CCT / CCC
+    assert sd == 1 and nd == 0
+
+
+def test_only_stop_pathways_give_none():
+    """B14: no valid pathway -> None (the caller skips the pair)."""
+    from types import SimpleNamespace
+
+    codons = [a + b + c for a in "TCAG" for b in "TCAG" for c in "TCAG"]
+    stops = ["ACA", "AAC"]  # both intermediates of AAA -> ACC
+    table = SimpleNamespace(
+        stop_codons=stops,
+        forward_table={c: "K" if c == "AAA" else "T" for c in codons if c not in stops},
+    )
+    assert count_differences("AAA", "ACC", table) is None
+    # The standard code has no sense pair whose every pathway hits a stop
+    std = get_codon_table()
+    sense = [c for c in codons if c in std.forward_table]
+    assert all(count_differences(x, y, std) is not None for x in sense for y in sense)
+
+
+@pytest.mark.parametrize("dn, ds, expected", [
+    (0.1, 0.0, math.inf),
+    (0.0, 0.0, math.nan),
+    (math.nan, 0.1, math.nan),
+    (0.2, 0.1, 2.0),
+])
+def test_dnds_ratio(dn, ds, expected):
+    """T-DNDS-2 (B14)."""
+    got = dnds_ratio(dn, ds)
+    assert isinstance(got, float)
+    if math.isnan(expected):
+        assert math.isnan(got)
+    else:
+        assert got == pytest.approx(expected)
+
+
+def test_dnds_ratio_array():
+    got = dnds_ratio(np.array([0.1, 0.0, 0.2]), np.array([0.0, 0.0, 0.1]))
+    assert isinstance(got, np.ndarray)
+    np.testing.assert_array_equal(got, [np.inf, np.nan, 2.0])

@@ -165,21 +165,23 @@ def one_snp_genes(n_long, n_short, rng):
     return {"c1": "".join(seq)}, {"c1": v}, genes
 
 
-@pytest.mark.xfail(strict=True, reason="B3")
 # The pool forks inside pytest, whose process already runs threads (BLAS);
 # Python 3.12+ warns about that. The scripts fork the same way (ADR-4).
 @pytest.mark.filterwarnings("ignore:This process .* is multi-threaded")
 def test_gene_rows_follow_gff_order(sel):
+    """T-SEL-1 (B3)."""
     # Three chunks of 20 genes; the first chunk is ~100x slower, so with an
-    # unordered map its rows come last.
+    # unordered map its rows would come last.
     ref, v, genes = one_snp_genes(20, 25, np.random.default_rng(0))
     for _ in range(2):
-        df = sel.calculate_dnds_for_genomes(ref, (v, np.array(["S1", "S2"])), genes)
+        df, errors = sel.run_genes(ref, v, np.array(["S1", "S2"]), genes, 3)
+        assert not errors
         assert list(dict.fromkeys(df["gene"])) == list(genes)
+        assert list(df["strain"][:2]) == ["S1", "S2"]
 
 
-@pytest.mark.xfail(strict=True, reason="B4")
 def test_contig_name_mismatch_exits(tmp_path):
+    """T-SEL-2 (B4)."""
     import os
     import subprocess
     import sys
@@ -209,3 +211,133 @@ def test_contig_name_mismatch_exits(tmp_path):
     assert "chr1" in out and "ctg1" in out
     tsv = tmp_path / "results" / "sel.tsv"
     assert not tsv.exists() or tsv.stat().st_size > 1
+
+
+def run_selection(tmp_path, vcf, gff=None):
+    from conftest import PROJECT_ROOT, run_script
+
+    data = PROJECT_ROOT / "examples" / "data"
+    samples = (data / "metadata.tsv").read_text().split()[4::4]
+    nwk = tmp_path / "t.nwk"
+    nwk.write_text("(" + ",".join(f"{s}:1" for s in samples) + ");")
+    return run_script("selection", tmp_path, "--vcf", vcf, "--gff",
+                      gff or data / "example.gff", "--fasta", data / "example.fna",
+                      "--nwk", nwk, "--out", tmp_path / "sel", "--jobs", "2")
+
+
+def test_no_difference_writes_header_and_zero_summary(tmp_path):
+    """T-SEL-3 (B4): every call is reference."""
+    from conftest import PROJECT_ROOT
+
+    lines = []
+    src = PROJECT_ROOT / "examples" / "data" / "example.vcf"
+    for line in src.read_text().splitlines():
+        if not line.startswith("#"):
+            f = line.split("\t")
+            line = "\t".join(f[:9] + ["0"] * (len(f) - 9))
+        lines.append(line)
+    vcf = tmp_path / "ref.vcf"
+    vcf.write_text("\n".join(lines) + "\n")
+    result = run_selection(tmp_path, vcf)
+    assert result.returncode == 0, result.stdout + result.stderr
+    res = tmp_path / "results"
+    tsv = pd.read_csv(res / "sel.tsv", sep="\t")
+    assert tsv.empty and list(tsv.columns) == sel_columns()
+    summary = pd.read_csv(res / "sel.summary.tsv", sep="\t", index_col=0)
+    assert len(summary) == 24
+    assert (summary[["N_diff", "S_diff", "dN", "dS"]] == 0).all().all()
+
+
+def sel_columns():
+    return ["gene", "strain", "dN", "dS", "dN/dS", "pN", "pS",
+            "N_diff", "S_diff", "N_sites", "S_sites"]
+
+
+def test_fasta_name_mismatch_exits(tmp_path):
+    """B4: no VCF contig in the FASTA."""
+    from conftest import PROJECT_ROOT
+
+    src = PROJECT_ROOT / "examples" / "data" / "example.vcf"
+    vcf = tmp_path / "chr.vcf"
+    vcf.write_text("\n".join(
+        line if line.startswith("#") else line.replace("ctg", "chr", 1)
+        for line in src.read_text().splitlines()) + "\n")
+    result = run_selection(tmp_path, vcf)
+    out = result.stdout + result.stderr
+    assert result.returncode != 0
+    assert "chr1" in out and "ctg1" in out
+    assert not (tmp_path / "results" / "sel.tsv").exists()
+
+
+def test_report_failures(sel, caplog):
+    errors = [f"g{i}: boom" for i in range(25)]
+    with caplog.at_level("WARNING"):
+        sel.report_failures(errors, 30)
+    text = caplog.text
+    assert "25 of 30 genes failed" in text and "g19: boom" in text
+    assert "g20: boom" not in text and "and 5 more" in text
+    with pytest.raises(SystemExit):
+        sel.report_failures(errors, 25)
+
+
+def test_count_partial_codons(sel):
+    genes = {"ok": [cds(0, 9, phase=0)], "bad": [cds(0, 10, phase=0)],
+             "phase": [cds(0, 10, phase=1)]}
+    assert sel.count_partial_codons(genes) == 1
+
+
+@pytest.fixture
+def two_sample_vcf(tmp_path):
+    vcf = tmp_path / "s.vcf"
+    vcf.write_text(VCF_HEADER + "c1\t5\t.\tA\tC\t.\tPASS\t.\tGT\t1\t0\n")
+    return vcf
+
+
+@pytest.mark.parametrize("newick", [None, "(X:1,Y:1);", "(S1:1,S1:2,S2:1);"])
+def test_validate_tree_exits(sel, tmp_path, two_sample_vcf, newick):
+    """T-SEL-6 (B12): missing file, zero overlap, duplicate tips."""
+    nwk = tmp_path / "t.nwk"
+    if newick is not None:
+        nwk.write_text(newick)
+    with pytest.raises(SystemExit):
+        sel.validate_tree(str(nwk), str(two_sample_vcf))
+
+
+def test_validate_tree_partial_overlap_warns(sel, tmp_path, two_sample_vcf, caplog):
+    """T-SEL-6 (B12): one warning per direction; no branch lengths warns."""
+    nwk = tmp_path / "t.nwk"
+    nwk.write_text("(S1:1,X:1);")
+    with caplog.at_level("WARNING"):
+        tree = sel.validate_tree(str(nwk), str(two_sample_vcf))
+    assert tree.count_terminals() == 2
+    assert "1 samples in VCF are missing" in caplog.text
+    assert "1 samples in Tree are missing" in caplog.text
+    assert "no branch lengths" not in caplog.text
+    nwk.write_text("(S1,S2);")
+    with caplog.at_level("WARNING"):
+        sel.validate_tree(str(nwk), str(two_sample_vcf))
+    assert "no branch lengths" in caplog.text
+
+
+def test_draw_annotated_tree_keeps_topology(sel, tmp_path, monkeypatch):
+    """T-SEL-7 (B12): the tree is drawn as given, not re-clustered."""
+    import io
+
+    import matplotlib.pyplot as plt
+    from Bio import Phylo
+    from popgen.io import ensure_output_dirs
+
+    tree = Phylo.read(io.StringIO("((a:1,b:3):1,c:5);"), "newick")
+    paths = ensure_output_dirs(tmp_path / "t")
+    figs = []
+    real_close = plt.close
+    monkeypatch.setattr(plt, "close", figs.append)  # keep the figure to inspect
+    sel.draw_annotated_tree(tree, {"a": 0.5, "b": 0.012}, "dN", "dN", paths)
+    monkeypatch.undo()
+    assert paths.png("dN.tree").exists() and paths.svg("dN.tree").exists()
+    ax = figs[0].axes[0]
+    tips = sorted((t for t in ax.texts if "(dN:" in t.get_text()),
+                  key=lambda t: t.get_position()[1])
+    assert [t.get_text().strip() for t in tips] == [
+        "a (dN: 0.50)", "b (dN: 0.012)", "c (dN: N/A)"]
+    real_close(figs[0])

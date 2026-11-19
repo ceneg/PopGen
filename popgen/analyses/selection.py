@@ -5,11 +5,13 @@ on a tree.
 """
 
 import argparse
-import copy
 import logging
 import math
 import multiprocessing as mp
+import os
 from collections import defaultdict
+from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures.process import BrokenProcessPool
 from pathlib import Path
 
 import matplotlib
@@ -20,17 +22,52 @@ import numpy as np
 import pandas as pd
 from Bio import Phylo, SeqIO
 from Bio.Seq import Seq
-from scipy.cluster.hierarchy import dendrogram, linkage
-from scipy.spatial.distance import squareform
 
-from popgen.dnds import calculate_pairwise_dnds, jukes_cantor
-from popgen.cli import add_out_argument
+from popgen.dnds import calculate_pairwise_dnds, dnds_ratio, jukes_cantor
+from popgen.cli import add_out_argument, positive_int
 from popgen.genotypes import contig_rows, haploid_alleles
 from popgen.io import ensure_output_dirs, read_vcf, safe_name, write_table
 from popgen.plotting import save_figure
 from popgen.runlog import die, setup_logging
 
 log = logging.getLogger("selection")
+
+# Genes per task of the worker pool
+GENE_CHUNK = 20
+# Columns of the per-gene table
+RESULT_COLUMNS = ["gene", "strain", "dN", "dS", "dN/dS", "pN", "pS",
+                  "N_diff", "S_diff", "N_sites", "S_sites"]
+# Failed genes listed one by one in the log
+MAX_LISTED_FAILURES = 20
+
+
+def first_names(names, n: int = 3) -> str:
+    """The first ``n`` names, comma-separated, with "..." if there are more."""
+    names = [str(x) for x in names]
+    return ", ".join(names[:n]) + (", ..." if len(names) > n else "")
+
+
+def report_failures(errors: list[str], n_genes: int) -> None:
+    """Log every failed gene (at most ``MAX_LISTED_FAILURES``); exit if all failed."""
+    if not errors:
+        return
+    log.warning(f"Warning: {len(errors)} of {n_genes} genes failed and were skipped:")
+    for err in errors[:MAX_LISTED_FAILURES]:
+        log.warning(f"  {err}")
+    if len(errors) > MAX_LISTED_FAILURES:
+        log.warning(f"  and {len(errors) - MAX_LISTED_FAILURES} more")
+    if len(errors) == n_genes:
+        die("every gene failed; see the messages above.")
+
+
+def count_partial_codons(genes: dict) -> int:
+    """Genes whose CDS length after the phase trim is not a multiple of 3."""
+    n = 0
+    for cds_list in genes.values():
+        minus = cds_list[0]["strand"] == "-"
+        phase = cds_list[-1]["phase"] if minus else cds_list[0]["phase"]
+        n += (sum(c["end"] - c["start"] for c in cds_list) - phase) % 3 != 0
+    return n
 
 
 def load_reference_genome(fasta_path: str) -> dict[str, str]:
@@ -160,7 +197,8 @@ def reconstruct_genomes_from_vcf(vcf_path: str, ref_genome: dict[str, str]) -> t
     variants_by_chrom = {}
     n_ref_mismatch = 0
     n_off_contig = 0
-    for chrom, idx in contig_rows(chroms, poss, "sort").items():  # VCF order
+    rows_by_contig = contig_rows(chroms, poss, "sort")
+    for chrom, idx in rows_by_contig.items():  # VCF order
         idx = idx[is_snp[idx]]  # sorted by position
         if chrom not in ref_genome:
             n_off_contig += len(idx)
@@ -186,6 +224,10 @@ def reconstruct_genomes_from_vcf(vcf_path: str, ref_genome: dict[str, str]) -> t
     if n_ref_mismatch:
         log.warning(f"Warning: skipped {n_ref_mismatch} SNPs whose REF mismatches "
                     "the FASTA.")
+    if not variants_by_chrom:
+        die("no SNP of the VCF could be placed on the reference: check that the "
+            f"VCF contigs ({first_names(rows_by_contig)}) match the FASTA record "
+            f"ids ({first_names(ref_genome)}) and that REF matches the FASTA.")
 
     return variants_by_chrom, samples
 
@@ -307,7 +349,7 @@ def process_gene(item: tuple[str, list[dict]]) -> tuple[list[dict], str | None]:
                     "strain": sample,
                     "dN": dN,
                     "dS": dS,
-                    "dN/dS": dN / dS if dS > 0 else np.nan,
+                    "dN/dS": dnds_ratio(dN, dS),
                     "pN": pN,
                     "pS": pS,
                     "N_diff": n_diff,
@@ -321,51 +363,58 @@ def process_gene(item: tuple[str, list[dict]]) -> tuple[list[dict], str | None]:
         return [], f"{gene_id}: {e}"
 
 
-def calculate_dnds_for_genomes(ref_genome, genomes_data, genes) -> pd.DataFrame:
+def default_jobs() -> int:
+    """CPUs available to this process (CPU affinity where known), minus one."""
+    try:
+        n = len(os.sched_getaffinity(0))
+    except AttributeError:  # not on Linux
+        n = os.cpu_count() or 1
+    return max(1, n - 1)
+
+
+def run_genes(
+    ref_genome, variants_by_chrom, samples, genes: dict, jobs: int
+) -> tuple[pd.DataFrame, list[str]]:
     """
-    Count every gene in parallel on all CPU cores but one.
+    Count every gene in ``jobs`` worker processes.
+
+    With the fork start method the workers inherit the (read-only) data
+    copy-on-write instead of each receiving a pickled copy (ADR-4); other start
+    methods pass it to ``init_worker``.
 
     Returns:
-        DataFrame with one row per gene and sample (all genes).
+        tuple: (DataFrame with one row per gene and sample, in gene order and
+        then sample order; error messages of the genes that failed).
     """
-    variants_by_chrom, samples = genomes_data
-
-    processes = max(1, mp.cpu_count() - 1)
-    log.info(f"Calculating dN/dS using {processes} parallel processes...")
-
+    log.info(f"Calculating dN/dS using {jobs} parallel processes...")
     items = list(genes.items())
-    total_genes = len(items)
-    chunksize = 20
 
-    all_results = []
-    errors = []
-
-    # With fork, workers inherit the (read-only) data copy-on-write instead of
-    # each receiving a pickled copy; other start methods pass it explicitly.
     init_worker(ref_genome, variants_by_chrom, samples)
     if "fork" in mp.get_all_start_methods():
-        pool = mp.get_context("fork").Pool(processes=processes)
+        executor = ProcessPoolExecutor(max_workers=jobs,
+                                       mp_context=mp.get_context("fork"))
     else:
-        pool = mp.Pool(
-            processes=processes,
+        executor = ProcessPoolExecutor(
+            max_workers=jobs,
             initializer=init_worker,
             initargs=(ref_genome, variants_by_chrom, samples),
         )
-    with pool:
-        count = 0
-        for res, err in pool.imap_unordered(process_gene, items, chunksize=chunksize):
-            all_results.extend(res)
-            if err:
-                errors.append(err)
-            count += 1
-            if count % 500 == 0:
-                log.info(f"Processed {count}/{total_genes} genes...")
 
-    log.info(f"Finished processing {total_genes} genes.")
-    if errors:
-        log.warning(f"Warning: {len(errors)} genes failed and were skipped, "
-                    f"e.g. {errors[0]}")
-    return pd.DataFrame(all_results)
+    all_results, errors = [], []
+    try:
+        with executor:
+            results = executor.map(process_gene, items, chunksize=GENE_CHUNK)
+            for count, (res, err) in enumerate(results, 1):
+                all_results.extend(res)
+                if err:
+                    errors.append(err)
+                if count % 500 == 0:
+                    log.info(f"Processed {count}/{len(items)} genes...")
+    except BrokenProcessPool:
+        die("a worker process died (out of memory?); try a smaller --jobs.")
+
+    log.info(f"Finished processing {len(items)} genes.")
+    return pd.DataFrame(all_results, columns=RESULT_COLUMNS), errors
 
 
 def genes_in_vcf_region(genes: dict, variants_by_chrom: dict) -> dict:
@@ -408,8 +457,7 @@ def summarise_by_strain(results_df: pd.DataFrame) -> pd.DataFrame:
     p_s = sums["S_diff"] / sums["S_sites"]
     strain_df["dN"] = jukes_cantor(p_n.to_numpy())
     strain_df["dS"] = jukes_cantor(p_s.to_numpy())
-    with np.errstate(invalid="ignore", divide="ignore"):
-        strain_df["dN/dS"] = strain_df["dN"] / strain_df["dS"]
+    strain_df["dN/dS"] = dnds_ratio(strain_df["dN"], strain_df["dS"])
     strain_df["pN"] = p_n
     strain_df["pS"] = p_s
     strain_df = pd.concat([strain_df, sums], axis=1)
@@ -435,63 +483,44 @@ def format_value(val) -> str:
     return f"{val:.1f}"
 
 
-def annotate_tree(tree, df: pd.DataFrame, metric_col: str):
+def draw_annotated_tree(tree, values: dict, metric: str, title: str, paths) -> None:
     """
-    Copy of ``tree`` with each tip renamed to "<name> (<metric>: <value>)"
-    (N/A for tips without results).
+    Draw the tree as given (topology and branch lengths of the Newick file)
+    with each tip labelled "<name> (<metric>: <value>)", N/A for tips without
+    results. Writes PREFIX.<metric>.tree.png/svg.
+
+    Args:
+        tree: Bio.Phylo tree (not modified).
+        values: Strain name -> metric value.
+        metric: Column name, used in the labels and (via safe_name) file names.
+        title: Figure title suffix.
+        paths: Output paths from ``ensure_output_dirs``.
     """
-    tree_copy = copy.deepcopy(tree)
-    label_map = df.set_index("strain")[metric_col].to_dict()
-    for clade in tree_copy.get_terminals():
-        name = clade.name
-        value = format_value(label_map[name]) if name in label_map else "N/A"
-        clade.name = f"{name} ({metric_col}: {value})"
-    return tree_copy
+    def label(clade):
+        if not clade.is_terminal():
+            return None
+        value = format_value(values[clade.name]) if clade.name in values else "N/A"
+        return f"{clade.name} ({metric}: {value})"
 
+    n_tips = tree.count_terminals()
+    fig, ax = plt.subplots(figsize=(20, max(8, 0.25 * n_tips)))
+    Phylo.draw(tree, axes=ax, do_show=False, label_func=label)
+    ax.spines[["top", "right", "left"]].set_visible(False)
+    ax.set_yticks([])
+    ax.set_ylabel("")
+    ax.set_title(f"Phylogenetic Tree Annotated with {title}", fontsize=16)
+    fig.tight_layout()
 
-def plot_and_save_dendrogram(tree, df, paths, metric_col, title_suffix) -> None:
-    """
-    Draw the annotated tree as a dendrogram, redrawn by UPGMA from its
-    tip-to-tip distances (identical to the input for an ultrametric tree).
-    """
-    annotated_tree = annotate_tree(tree, df, metric_col)
-    terminals = annotated_tree.get_terminals()
-    labels = [term.name for term in terminals]
-    n = len(labels)
-
-    if n == 0:
-        return
-
-    dist_matrix = np.zeros((n, n))
-
-    for i in range(n):
-        for j in range(i + 1, n):
-            dist = annotated_tree.distance(terminals[i], terminals[j])
-            dist_matrix[i, j] = dist_matrix[j, i] = dist
-
-    linkage_matrix = linkage(squareform(dist_matrix), method="average")
-
-    plt.figure(figsize=(20, max(8, 0.25 * n)))
-    dendrogram(
-        linkage_matrix,
-        labels=labels,
-        leaf_rotation=0,
-        orientation="left",
-        leaf_font_size=12,
-    )
-    plt.gca().spines[["top", "right", "left", "bottom"]].set_visible(False)
-    plt.title(f"Phylogenetic Tree Annotated with {title_suffix}", fontsize=16)
-    plt.tight_layout()
-
-    stem = f"{safe_name(metric_col)}.upgma"
-    save_figure(plt.gcf(), paths, stem, bbox_inches="tight", png_kwargs={"dpi": 300})
-    log.info(f"Saved {metric_col} tree to {paths.png(stem)}")
+    stem = f"{safe_name(metric)}.tree"
+    save_figure(fig, paths, stem, bbox_inches="tight", png_kwargs={"dpi": 300})
+    log.info(f"Saved {metric} tree to {paths.png(stem)}")
 
 
 def validate_tree(nwk: str, vcf: str):
     """
     Read the Newick tree and check that it shares samples with the VCF (only
-    the VCF header is read). Exits on error; warns about partial overlap.
+    the VCF header is read). Exits on error or duplicate tip names; warns
+    about partial overlap and a tree without branch lengths.
 
     Returns:
         The Bio.Phylo tree.
@@ -502,42 +531,48 @@ def validate_tree(nwk: str, vcf: str):
 
     try:
         tree = Phylo.read(nwk, "newick")
-        tree_samples = {term.name for term in tree.get_terminals()}
-
-        if not tree_samples:
-            die("Tree contains no terminal nodes (samples).")
-
-        log.info("Checking sample consistency...")
-        vcf_samples, _, _ = read_vcf(vcf, fields=["samples"])
-        vcf_samples_set = set(vcf_samples)
-
-        common = tree_samples.intersection(vcf_samples_set)
-        if not common:
-            log.info(f"Tree samples (first 5): {list(tree_samples)[:5]}")
-            log.info(f"VCF samples (first 5): {list(vcf_samples)[:5]}")
-            die("No common samples found between Tree and VCF.")
-
-        # Partial overlap is allowed: tips without results are labelled N/A,
-        # VCF samples absent from the tree are only in the TSV output.
-        missing_in_tree = vcf_samples_set - tree_samples
-        missing_in_vcf = tree_samples - vcf_samples_set
-
-        if missing_in_tree:
-            log.warning(
-                f"WARNING: {len(missing_in_tree)} samples in VCF are missing from "
-                "the Tree."
-            )
-        if missing_in_vcf:
-            log.warning(
-                f"WARNING: {len(missing_in_vcf)} samples in Tree are missing from "
-                "the VCF."
-            )
-
-        log.info("Tree validation successful.")
-        return tree
-
     except Exception as e:
         die(f"Invalid tree file: {e}")
+    tip_names = [term.name for term in tree.get_terminals()]
+    tree_samples = set(tip_names)
+
+    if not tree_samples:
+        die("Tree contains no terminal nodes (samples).")
+    if len(tree_samples) < len(tip_names):
+        dup = sorted({n for n in tip_names if tip_names.count(n) > 1}, key=str)
+        die(f"Tree has duplicate tip names: {first_names(dup)}.")
+    if not any(clade.branch_length for clade in tree.find_clades()):
+        log.warning("WARNING: the tree has no branch lengths; it is drawn as a "
+                    "cladogram.")
+
+    log.info("Checking sample consistency...")
+    vcf_samples, _, _ = read_vcf(vcf, fields=["samples"])
+    vcf_samples_set = set(vcf_samples)
+
+    common = tree_samples.intersection(vcf_samples_set)
+    if not common:
+        log.info(f"Tree samples (first 5): {list(tree_samples)[:5]}")
+        log.info(f"VCF samples (first 5): {list(vcf_samples)[:5]}")
+        die("No common samples found between Tree and VCF.")
+
+    # Partial overlap is allowed: tips without results are labelled N/A,
+    # VCF samples absent from the tree are only in the TSV output.
+    missing_in_tree = vcf_samples_set - tree_samples
+    missing_in_vcf = tree_samples - vcf_samples_set
+
+    if missing_in_tree:
+        log.warning(
+            f"WARNING: {len(missing_in_tree)} samples in VCF are missing from "
+            "the Tree."
+        )
+    if missing_in_vcf:
+        log.warning(
+            f"WARNING: {len(missing_in_vcf)} samples in Tree are missing from "
+            "the VCF."
+        )
+
+    log.info("Tree validation successful.")
+    return tree
 
 
 def main() -> None:
@@ -547,12 +582,16 @@ def main() -> None:
     parser.add_argument("--fasta", required=True, help="Reference FASTA")
     parser.add_argument("--nwk", required=True, help="Newick tree")
     add_out_argument(parser)
+    parser.add_argument(
+        "--jobs", type=positive_int, default=default_jobs(),
+        help="Worker processes (default: available CPUs minus one)",
+    )
     args = parser.parse_args()
     setup_logging("selection", args)
 
     paths = ensure_output_dirs(args.out)
 
-    validate_tree(args.nwk, args.vcf)
+    tree = validate_tree(args.nwk, args.vcf)
 
     log.info("Loading reference and GFF...")
     ref_genome = load_reference_genome(args.fasta)
@@ -560,45 +599,44 @@ def main() -> None:
 
     genomes_data = reconstruct_genomes_from_vcf(args.vcf, ref_genome)
     n_genes = len(genes)
+    gff_contigs = dict.fromkeys(c[0]["chrom"] for c in genes.values())
     genes = genes_in_vcf_region(genes, genomes_data[0])
+    if not genes:
+        die(f"none of the {n_genes} GFF genes lies in the region covered by the "
+            f"VCF SNPs: check that the GFF sequence ids ({first_names(gff_contigs)}) "
+            f"match the VCF contigs ({first_names(genomes_data[0])}).")
     if len(genes) < n_genes:
         log.info(
             f"Using {len(genes)} of {n_genes} genes inside the region covered by "
             "the VCF."
         )
+    n_partial = count_partial_codons(genes)
+    if n_partial:
+        log.warning(f"Warning: {n_partial} genes have a CDS length (after the phase "
+                    "trim) that is not a multiple of 3; the last partial codon is "
+                    "ignored.")
 
-    results_df = calculate_dnds_for_genomes(ref_genome, genomes_data, genes)
+    results_df, errors = run_genes(ref_genome, *genomes_data, genes, args.jobs)
+    report_failures(errors, len(genes))
 
     # Save TSV (genes with at least one difference from the reference)
     out_tsv = paths.table("tsv")
-    if results_df.empty:
-        changed_df = results_df
-    else:
-        changed_df = results_df[(results_df["pN"] > 0) | (results_df["pS"] > 0)]
+    changed_df = results_df[(results_df["pN"] > 0) | (results_df["pS"] > 0)]
     write_table(changed_df, out_tsv, sep="\t", index=False)
     log.info(f"dN/dS results saved to {out_tsv}")
+    if changed_df.empty:
+        log.info("No gene differs from the reference in any sample.")
 
-    if not changed_df.empty:
-        strain_df = summarise_by_strain(results_df)
-        write_table(strain_df, paths.table("summary.tsv"), sep="\t")
+    strain_df = summarise_by_strain(results_df)
+    write_table(strain_df, paths.table("summary.tsv"), sep="\t")
 
-        try:
-            tree = Phylo.read(args.nwk, "newick")
-            for metric, title in (
-                ("dS", "Genome-wide Synonymous Divergence (dS)"),
-                ("dN", "Genome-wide Non-Synonymous Divergence (dN)"),
-                ("dN/dS", "Genome-wide dN/dS Ratio"),
-            ):
-                plot_and_save_dendrogram(
-                    tree, strain_df.reset_index(), paths, metric, title
-                )
-
-        except Exception as e:
-            # Non-fatal: the TSV results are already written
-            log.error(f"ERROR: Failed to process tree for visualization: {e}")
-
-    else:
-        log.info("Skipping visualization (no results).")
+    values = strain_df.to_dict()
+    for metric, title in (
+        ("dS", "Genome-wide Synonymous Divergence (dS)"),
+        ("dN", "Genome-wide Non-Synonymous Divergence (dN)"),
+        ("dN/dS", "Genome-wide dN/dS Ratio"),
+    ):
+        draw_annotated_tree(tree, values[metric], metric, title, paths)
 
 
 if __name__ == "__main__":

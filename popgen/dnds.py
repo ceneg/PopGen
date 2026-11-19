@@ -1,7 +1,7 @@
 """Nei-Gojobori (1986) synonymous / non-synonymous site and difference counts."""
 
+import functools
 import itertools
-import warnings
 
 import numpy as np
 from Bio.Data import CodonTable
@@ -76,6 +76,10 @@ def count_differences(codon1, codon2, table):
     """
     Count synonymous (Sd) and non-synonymous (Nd) differences
     between two codons.
+
+    Mutational pathways through a stop codon are not counted. Returns None
+    when the codons differ at two or three positions and every pathway passes
+    through a stop codon (the pair cannot be counted).
     """
     if codon1 == codon2:
         return 0.0, 0.0
@@ -125,10 +129,11 @@ def count_differences(codon1, codon2, table):
             s2, n2 = count_differences(mid, codon2, table)
             paths.append((s1 + s2, n1 + n2))
 
-        if paths:
-            avg_s = sum(p[0] for p in paths) / len(paths)
-            avg_n = sum(p[1] for p in paths) / len(paths)
-            sd, nd = avg_s, avg_n
+        if not paths:
+            return None
+        avg_s = sum(p[0] for p in paths) / len(paths)
+        avg_n = sum(p[1] for p in paths) / len(paths)
+        sd, nd = avg_s, avg_n
 
     elif num_diffs == 3:
         # 6 paths.
@@ -156,20 +161,35 @@ def count_differences(codon1, codon2, table):
             if valid:
                 paths.append((step_sd, step_nd))
 
-        if paths:
-            avg_s = sum(p[0] for p in paths) / len(paths)
-            avg_n = sum(p[1] for p in paths) / len(paths)
-            sd, nd = avg_s, avg_n
+        if not paths:
+            return None
+        avg_s = sum(p[0] for p in paths) / len(paths)
+        avg_n = sum(p[1] for p in paths) / len(paths)
+        sd, nd = avg_s, avg_n
 
     return sd, nd
+
+
+@functools.lru_cache(maxsize=None)
+def _site_counts(codon, genetic_code):
+    """Cached ``count_site_types`` of one codon."""
+    return count_site_types(codon, get_codon_table(genetic_code))
+
+
+@functools.lru_cache(maxsize=None)
+def _difference_counts(codon1, codon2, genetic_code):
+    """Cached ``count_differences`` of one codon pair."""
+    return count_differences(codon1, codon2, get_codon_table(genetic_code))
 
 
 def calculate_pairwise_dnds(seq1, seq2, genetic_code=1):
     """
     Calculate dN/dS for two aligned coding sequences.
 
-    Sequences are compared case-insensitively. Codons containing anything
-    other than A/C/G/T (N, gaps, IUPAC codes) are skipped in both sequences.
+    Sequences are compared case-insensitively. Codon pairs are skipped (no
+    sites, no differences) when either codon contains anything other than
+    A/C/G/T (N, gaps, IUPAC codes), either codon is a stop codon, or every
+    mutational pathway between them passes through a stop codon.
 
     Returns:
         tuple: (pN, pS, N_diff, S_diff, N_sites, S_sites), where pN and pS
@@ -183,7 +203,7 @@ def calculate_pairwise_dnds(seq1, seq2, genetic_code=1):
         raise ValueError("Sequences must be of equal length")
 
     if len(seq1) % 3 != 0:
-        warnings.warn("Sequence length not multiple of 3. Truncating.")
+        # Trailing partial codon is ignored (selection.py counts such genes)
         length = (len(seq1) // 3) * 3
         seq1 = seq1[:length]
         seq2 = seq2[:length]
@@ -203,14 +223,20 @@ def calculate_pairwise_dnds(seq1, seq2, genetic_code=1):
         if not (VALID_BASES.issuperset(codon1) and VALID_BASES.issuperset(codon2)):
             continue
 
+        if codon1 not in table.forward_table or codon2 not in table.forward_table:
+            continue  # stop codon in either sequence
+        diff = _difference_counts(codon1, codon2, genetic_code)
+        if diff is None:
+            continue  # every pathway passes through a stop codon
+
         # Count Sites (Average of both)
-        s1, n1 = count_site_types(codon1, table)
-        s2, n2 = count_site_types(codon2, table)
+        s1, n1 = _site_counts(codon1, genetic_code)
+        s2, n2 = _site_counts(codon2, genetic_code)
         S_sites += (s1 + s2) / 2
         N_sites += (n1 + n2) / 2
 
         # Count Differences
-        sd, nd = count_differences(codon1, codon2, table)
+        sd, nd = diff
         S_diff += sd
         N_diff += nd
 
@@ -237,3 +263,22 @@ def jukes_cantor(p):
         d = -0.75 * np.log1p(-4.0 * p / 3.0)
     d = np.where(p < 0.75, d, np.nan)
     return float(d) if d.ndim == 0 else d
+
+
+def dnds_ratio(dn, ds):
+    """
+    dN/dS: NaN if either value is NaN or both are 0; inf if dS is 0 and dN is
+    positive; else dN / dS.
+
+    Args:
+        dn, ds: Scalars or arrays.
+
+    Returns:
+        float for scalar input, else an array.
+    """
+    dn = np.asarray(dn, dtype=float)
+    ds = np.asarray(ds, dtype=float)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        r = np.where(ds > 0, dn / ds, np.where(dn > 0, np.inf, np.nan))
+    r = np.where(np.isnan(dn) | np.isnan(ds), np.nan, r)
+    return float(r) if r.ndim == 0 else r

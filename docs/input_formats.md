@@ -75,4 +75,7 @@ column is respected. NCBI RefSeq GFF3 files work as they are.
 
 Newick tree whose tip names are VCF sample names, for example the
 `<prefix>.upgma.nwk` written by `structure.py`. Tips without results are
-labelled N/A; samples missing from the tree are still in the tables.
+labelled N/A; samples missing from the tree are still in the tables. Tip
+names must be unique. The tree is drawn as given (its topology and branch
+lengths); a tree without branch lengths is drawn as a cladogram, with a
+warning.
