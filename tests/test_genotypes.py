@@ -6,6 +6,7 @@ from popgen.genotypes import (
     alt_allele_counts,
     call_states,
     contig_rows,
+    distance_matrices,
     haploid_alleles,
     pairwise_differences,
     ploidy_kind,
@@ -138,3 +139,19 @@ def test_contig_rows_first_appearance_order():
     rows = contig_rows(chrom, [1, 1, 2, 1, 2], "error")
     assert list(rows) == ["z", "b", "a"]
     np.testing.assert_array_equal(rows["b"], [1, 4])
+
+
+def test_distance_matrices_haploid_with_missing():
+    # (n_variants, n_samples, ploidy), haploid parsed as diploid "x/."
+    g = np.array(
+        [
+            [[0, -1], [1, -1], [1, -1]],
+            [[0, -1], [0, -1], [-1, -1]],
+            [[1, -1], [0, -1], [1, -1]],
+        ]
+    )
+    divergence, differences, compared = distance_matrices(alt_allele_counts(g).T)
+    # pairs (0,1), (0,2), (1,2); sample 2 is missing at variant 2
+    np.testing.assert_array_equal(differences, [2, 1, 1])
+    np.testing.assert_array_equal(compared, [3, 2, 2])
+    np.testing.assert_allclose(divergence, [2 / 3, 1 / 2, 1 / 2])

@@ -55,9 +55,9 @@ S02	soil	South	A
 
 The scripts stop if the file cannot be read, has no `strain` column, has an
 empty or repeated strain name, or names none of the VCF samples. Samples
-missing from the metadata trigger one warning and have no category in the
-plots (`network.py` labels them "unknown"); metadata rows without a matching
-VCF sample are ignored.
+missing from the metadata, and empty values, trigger one warning and are
+drawn in grey as "unknown" in every plot; metadata rows without a matching VCF
+sample are ignored.
 
 ## Reference genome (`--fasta`: `selection.py`)
 
@@ -74,7 +74,8 @@ column is respected. NCBI RefSeq GFF3 files work as they are.
 ## Tree (`--nwk`: `selection.py`)
 
 Newick tree whose tip names are VCF sample names, for example the
-`<prefix>.upgma.nwk` written by `structure.py`. Tips without results are
+`<prefix>.upgma.nwk` written by `structure.py` (which quotes names containing
+spaces or any of `()[]':;,` in single quotes, as Newick requires). Tips without results are
 labelled N/A; samples missing from the tree are still in the tables. Tip
 names must be unique. The tree is drawn as given (its topology and branch
 lengths); a tree without branch lengths is drawn as a cladogram, with a

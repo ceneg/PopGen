@@ -7,11 +7,22 @@ def net(load_script):
     return load_script("network")
 
 
+def collapse(net, names, g, threshold):
+    """Matrix-based collapse as in network.main: (cluster_map, groups, dist)."""
+    from scipy.spatial.distance import squareform
+
+    from popgen.genotypes import distance_matrices
+
+    diff_square = squareform(distance_matrices(g)[1])
+    cluster_map, reps = net.collapse_sequences(names, diff_square, threshold)
+    groups = [f"G{i + 1}" for i in range(len(reps))]
+    return cluster_map, groups, diff_square[np.ix_(reps, reps)]
+
+
 def test_collapse_ignores_missing(net):
     g = np.array([[0, 1, 0], [0, -1, 0], [1, 0, 1]])
-    cluster_map, clusters = net.collapse_sequences(["a", "b", "c"], g, 0)
+    cluster_map, names, dist = collapse(net, ["a", "b", "c"], g, 0)
     assert cluster_map == {"a": "G1", "b": "G1", "c": "G2"}
-    names, dist = net.compute_distance_matrix(clusters)
     assert names == ["G1", "G2"]
     assert dist[0, 1] == 3
 
@@ -31,8 +42,7 @@ def test_msn_is_minimum_spanning_tree(net):
 
     rng = np.random.default_rng(0)
     g = rng.integers(0, 2, (9, 60))
-    _, clusters = net.collapse_sequences([str(i) for i in range(9)], g, 0)
-    names, dist = net.compute_distance_matrix(clusters)
+    _, names, dist = collapse(net, [str(i) for i in range(9)], g, 0)
     tree = net.build_msn(names, dist)
     assert tree.number_of_edges() == len(names) - 1
     total = sum(d["weight"] for _, _, d in tree.edges(data=True))
@@ -55,15 +65,14 @@ def near_identical_genotypes():
 
 
 def test_collapse_matches_v101_record(net):
-    """Collapse and representative distances as recorded from v1.01."""
+    """T-NET-1 (R6): collapse and representative distances as recorded from v1.01."""
     import json
     import os
 
     names, g = near_identical_genotypes()
     got = {}
     for threshold in (0, 2, 5):
-        cluster_map, clusters = net.collapse_sequences(names, g, threshold)
-        gnames, dist = net.compute_distance_matrix(clusters)
+        cluster_map, gnames, dist = collapse(net, names, g, threshold)
         got[str(threshold)] = {"cluster_map": cluster_map, "groups": gnames,
                                "dist": dist.tolist()}
     record = GOLDEN / "net_collapse.json"

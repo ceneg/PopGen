@@ -254,3 +254,23 @@ def pairwise_differences(
         compared += both
         diffs += both - same
     return np.rint(diffs[iu]), compared[iu]
+
+
+def distance_matrices(counts) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Pairwise distances between samples over the sites called in both samples
+    of a pair (one ``pairwise_differences`` call).
+
+    Args:
+        counts: (n_samples, n_variants) allele counts, negative = missing.
+
+    Returns:
+        tuple: (divergence, differences, compared) as condensed
+        (``pdist`` order) arrays: the proportion of differing sites (NaN for a
+        pair without shared sites; see ``require_shared_sites``), the number
+        of differing sites and the number of sites called in both samples.
+    """
+    diffs, compared = pairwise_differences(counts)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        divergence = diffs / compared
+    return divergence, diffs, compared

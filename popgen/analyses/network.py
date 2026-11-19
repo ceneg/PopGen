@@ -21,7 +21,7 @@ from scipy.spatial.distance import squareform
 from popgen.cli import add_out_argument, non_negative_int, positive_float
 from popgen.genotypes import (
     alt_allele_counts,
-    pairwise_differences,
+    distance_matrices,
     report_call_rates,
     require_shared_sites,
 )
@@ -34,62 +34,51 @@ from popgen.io import (
     safe_name,
     safe_names,
 )
-from popgen.plotting import save_figure
+from popgen.plotting import (
+    add_category_legend,
+    categories,
+    category_colors,
+    save_figure,
+)
 from popgen.runlog import setup_logging
 
 log = logging.getLogger("network")
 
 
 def collapse_sequences(
-    names, genotypes: np.ndarray, threshold: int
-) -> tuple[dict[str, str], list[np.ndarray]]:
+    names, diff_square: np.ndarray, threshold: int
+) -> tuple[dict[str, str], list[int]]:
     """
     Group samples whose genotypes differ at no more than ``threshold`` sites.
 
     Greedy, in input order: each sample joins the first group whose
-    representative (its first member) is within the threshold. Sites missing
-    (< 0) in either sample are not counted.
+    representative (its first member) is within the threshold.
 
     Args:
         names: Sample names.
-        genotypes: (n_samples, n_variants) allele counts, -1 = missing.
+        diff_square: Square matrix of differing sites between samples (sites
+            called in both), from ``distance_matrices``.
         threshold: Largest number of differences within a group.
 
     Returns:
-        tuple: ({sample: "G<n>"}, list of group representative genotypes).
+        tuple: ({sample: "G<n>"}, sample indices of the group representatives).
+        The representatives' distances are ``diff_square[np.ix_(reps, reps)]``.
     """
     log.info(f"Clustering sequences with contract threshold {threshold}...")
-    clusters = []
+    reps = []
     cluster_map = {}
 
-    for name, seq in zip(names, genotypes):
-        for idx, rep in enumerate(clusters):
-            diff = np.sum((seq != rep) & (seq >= 0) & (rep >= 0))
-            if diff <= threshold:
+    for i, name in enumerate(names):
+        for idx, rep in enumerate(reps):
+            if diff_square[i, rep] <= threshold:
                 cluster_map[name] = f"G{idx + 1}"
                 break
         else:
-            clusters.append(seq)
-            cluster_map[name] = f"G{len(clusters)}"
+            reps.append(i)
+            cluster_map[name] = f"G{len(reps)}"
 
-    log.info(f"Identified {len(clusters)} unique genotypes (clusters).")
-    return cluster_map, clusters
-
-
-def compute_distance_matrix(clusters) -> tuple[list[str], np.ndarray]:
-    """
-    Pairwise differences between group representatives (sites called in both).
-
-    Returns:
-        tuple: (group names "G1".., square distance matrix).
-    """
-    log.info("Computing distance matrix for genotypes...")
-    gnames = [f"G{i+1}" for i in range(len(clusters))]
-    gseqs = np.array(clusters)
-
-    diffs, _ = pairwise_differences(gseqs)
-    dist_matrix = squareform(diffs)
-    return gnames, dist_matrix
+    log.info(f"Identified {len(reps)} unique genotypes (clusters).")
+    return cluster_map, reps
 
 
 def build_msn(gnames, dist_matrix) -> nx.Graph:
@@ -130,14 +119,6 @@ def layout_tree(G: nx.Graph, k: float = 1.0) -> dict:
     return nx.spring_layout(G, seed=42, weight="attraction", k=k)
 
 
-def get_color_map(groups) -> dict:
-    """Map categories to tab20 (<= 20 categories) or hsv colours."""
-    n = len(groups)
-    base_cmap = plt.get_cmap("tab20" if n <= 20 else "hsv")
-    colors = [base_cmap(i / n) for i in range(n)]
-    return dict(zip(groups, colors))
-
-
 def draw_msn(
     G: nx.Graph,
     cluster_map: dict[str, str],
@@ -145,7 +126,7 @@ def draw_msn(
     column: str,
     paths: OutputPaths,
     layout_scale: float = 1.0,
-    diameter_scale: float = 0.001,
+    diameter_scale: float = 0.05,
 ) -> None:
     """
     Draw the tree with a pie chart per genotype, coloured by one metadata
@@ -162,23 +143,12 @@ def draw_msn(
             (``--diameter``).
     """
     log.info(f"Drawing network for {column}...")
-    label_data = metadata[column]
+    label_data = categories(metadata[column])
+    color_map = category_colors(metadata[column])
 
     pie_data = defaultdict(lambda: defaultdict(int))
     for strain, gid in cluster_map.items():
-        val = label_data.get(strain, "unknown")
-        if pd.isna(val):
-            val = "unknown"
-        pie_data[gid][val] += 1
-
-    # key=str: metadata values may mix numbers and the "unknown" label
-    groups = sorted(set().union(*(d.keys() for d in pie_data.values())), key=str)
-
-    color_map = get_color_map(groups)
-    default_color = (0.5, 0.5, 0.5, 1.0)
-
-    def get_color(key):
-        return color_map.get(key, default_color)
+        pie_data[gid][label_data[strain]] += 1
 
     max_total = max((sum(values.values()) for values in pie_data.values()), default=1)
 
@@ -194,7 +164,7 @@ def draw_msn(
         if total == 0:
             continue
         sizes = [v / total for v in values.values()]
-        colors = [get_color(g) for g in values.keys()]
+        colors = [color_map[g] for g in values.keys()]
         x, y = pos[node]
 
         radius = diameter_scale * (total**0.5) / (max_total**0.5)
@@ -225,10 +195,7 @@ def draw_msn(
     ax.set_ylim(xy[:, 1].min() - pad, xy[:, 1].max() + pad)
     ax.set_aspect("equal")
 
-    for label, color in color_map.items():
-        plt.plot([], [], marker="o", color=color, linestyle="", label=str(label))
-
-    plt.legend(title=column, loc="center left", bbox_to_anchor=(1.0, 0.5))
+    add_category_legend(ax, color_map, column)
     plt.axis("off")
 
     save_figure(plt.gcf(), paths, f"{safe_name(column)}.msn")
@@ -256,8 +223,8 @@ def main() -> None:
     parser.add_argument(
         "--diameter",
         type=positive_float,
-        default=0.001,
-        help="Radius of the largest pie chart in layout units (default 0.001)",
+        default=0.05,
+        help="Radius of the largest pie chart in layout units (default 0.05)",
     )
     args = parser.parse_args()
     setup_logging("network", args)
@@ -266,9 +233,11 @@ def main() -> None:
     samples, gt_array, _ = read_vcf(args.vcf, fields=["samples", "calldata/GT"])
     gt = alt_allele_counts(gt_array).T  # (n_samples, n_vars), -1 = missing
     report_call_rates(gt, samples)
-    require_shared_sites(pairwise_differences(gt)[1], samples)
+    _, diffs, compared = distance_matrices(gt)
+    require_shared_sites(compared, samples)
+    diff_square = squareform(diffs)
 
-    cluster_map, clusters = collapse_sequences(samples, gt, args.contract)
+    cluster_map, reps = collapse_sequences(samples, diff_square, args.contract)
 
     summary_out = paths.table("genotype_summary.txt")
     with atomic_write(summary_out) as f:
@@ -282,7 +251,8 @@ def main() -> None:
             f.write("\n")
     log.info(f"Saved genotype summary to {summary_out}")
 
-    gnames, dist_matrix = compute_distance_matrix(clusters)
+    gnames = [f"G{i + 1}" for i in range(len(reps))]
+    dist_matrix = diff_square[np.ix_(reps, reps)]
 
     if args.meta:
         meta = load_metadata(args.meta, samples)

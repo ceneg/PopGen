@@ -25,7 +25,7 @@ from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
 from popgen.cli import add_out_argument
 from popgen.genotypes import (
     alt_allele_counts,
-    pairwise_differences,
+    distance_matrices,
     report_call_rates,
     require_shared_sites,
 )
@@ -37,7 +37,13 @@ from popgen.io import (
     safe_names,
     write_table,
 )
-from popgen.plotting import save_figure
+from popgen.plotting import (
+    UNKNOWN,
+    add_category_legend,
+    categories,
+    category_colors,
+    save_figure,
+)
 from popgen.runlog import die, setup_logging
 
 log = logging.getLogger("structure")
@@ -50,6 +56,8 @@ DAPC_MAX_K = 10
 # Smallest cluster accepted; singleton/clonal clusters have no within-group
 # variance and make the discriminant axes degenerate
 DAPC_MIN_CLUSTER = 3
+# Newick names with any of these characters (or whitespace) are quoted
+NEWICK_SPECIAL = set("()[]':;,")
 
 
 def impute_missing(gt_matrix: np.ndarray) -> np.ndarray:
@@ -64,16 +72,6 @@ def impute_missing(gt_matrix: np.ndarray) -> np.ndarray:
         col_mean = np.nan_to_num(np.nanmean(x, axis=0))
         x[missing] = np.take(col_mean, np.nonzero(missing)[1])
     return x
-
-
-def compute_distance_matrix(genotypes: np.ndarray) -> np.ndarray:
-    """
-    Compute pairwise distance matrix for UPGMA: the proportion of differing
-    sites among the sites called in both samples.
-    """
-    diffs, compared = pairwise_differences(genotypes)
-    with np.errstate(invalid="ignore", divide="ignore"):
-        return squareform(diffs / compared)
 
 
 def add_confidence_ellipse(ax, x, y, color="blue") -> tuple[float, float]:
@@ -178,30 +176,30 @@ def choose_dapc_clusters(
     return best[0], best[1]
 
 
-def make_color_map(values) -> dict:
-    """Map category values to tab20 (<= 20 values) or hsv colours."""
-    n_colors = len(values)
-    palette = "tab20" if n_colors <= 20 else "hsv"
-    return dict(zip(values, sns.color_palette(palette, n_colors)))
-
-
 def scatter_groups(df, x, y, hue, color_map, paths, stem, title=None,
-                   ellipses=True, label_centroids=True, alpha=0.6):
+                   ellipses=True, label_centroids=True, alpha=0.6,
+                   legend_title=None):
     """
     Scatter plot coloured by ``hue``, optionally with a 95% ellipse and a
-    centroid marker for every group with more than two members; saved as
-    ``<stem>.png/svg``.
+    centroid marker for every group with more than two members (not for
+    ``UNKNOWN``); saved as ``<stem>.png/svg``.
+
+    Args:
+        legend_title: Legend title (default: ``hue``).
     """
     plt.figure(figsize=(12, 12))
     ax = plt.gca()
     ax.set_aspect("equal", adjustable="datalim")
 
     sns.scatterplot(
-        x=x, y=y, hue=hue, data=df, palette=color_map, alpha=alpha, ax=ax
+        x=x, y=y, hue=hue, data=df, palette=color_map, alpha=alpha, ax=ax,
+        hue_order=list(color_map), legend=False,
     )
 
     if ellipses:
         for val, col in color_map.items():
+            if val == UNKNOWN:
+                continue
             sub = df[df[hue] == val]
             if len(sub) > 2:
                 mx, my = add_confidence_ellipse(ax, sub[x], sub[y], color=col)
@@ -226,7 +224,7 @@ def scatter_groups(df, x, y, hue, color_map, paths, stem, title=None,
                         va="center",
                     )
 
-    plt.legend(loc="center left", bbox_to_anchor=(1, 0.5))
+    add_category_legend(ax, color_map, legend_title or hue)
     if title:
         plt.title(title)
     plt.tight_layout(rect=[0, 0, 0.85, 1])
@@ -234,30 +232,41 @@ def scatter_groups(df, x, y, hue, color_map, paths, stem, title=None,
 
 
 def plot_by_metadata(df, x, y, meta, paths, prefix, label) -> None:
-    """Annotated (ellipses) and simple scatter plots for every metadata column."""
+    """
+    Annotated (ellipses) and simple scatter plots for every metadata column.
+    Samples without a value are drawn in grey as ``UNKNOWN``.
+    """
     file_names = safe_names(meta.columns)
     for column in meta.columns:
-        df[column] = meta[column]
-        color_map = make_color_map(df[column].dropna().unique())
+        # A separate frame: a column named like a coordinate must not replace it
+        data = df[[x, y]].assign(_category=categories(meta[column]).to_numpy())
+        color_map = category_colors(meta[column])
         stem = f"{prefix}.{file_names[column]}"
 
         scatter_groups(
-            df, x, y, column, color_map, paths, f"{stem}.annotated",
-            title=f"{label} - {column} (with 95% Ellipses)",
+            data, x, y, "_category", color_map, paths, f"{stem}.annotated",
+            title=f"{label} - {column} (with 95% Ellipses)", legend_title=column,
         )
         scatter_groups(
-            df, x, y, column, color_map, paths, stem,
+            data, x, y, "_category", color_map, paths, stem,
             ellipses=False,
             alpha=0.5,
+            legend_title=column,
         )
 
 
 def plot_pca(coords, samples, meta, paths) -> None:
-    """Write the PCA coordinates and plot PC1 vs PC2 (plain and per metadata column)."""
+    """
+    Write the PCA coordinates and plot PC1 vs PC2 (plain and per metadata
+    column); with a single component only the coordinates are written.
+    """
     n_components = coords.shape[1]
     cols = [f"PC{i+1}" for i in range(n_components)]
     df = pd.DataFrame(coords, columns=cols, index=samples)
     write_table(df, paths.table("pca.tsv"), sep="\t")
+    if n_components < 2:
+        log.warning("WARNING: only one principal component; PCA plots skipped.")
+        return
 
     plt.figure(figsize=(10, 10))
     sns.scatterplot(x="PC1", y="PC2", data=df, alpha=0.5)
@@ -274,31 +283,53 @@ def plot_dapc(coords, samples, meta, paths, groups=None) -> None:
     write_table(df, paths.table("dapc.tsv"), sep="\t")
 
     if groups is not None:
-        df["Group"] = groups
         unique_grps = np.unique(groups)
         palette = sns.color_palette("tab20", len(unique_grps))
         grp_colors = dict(zip(unique_grps, palette))
         scatter_groups(
-            df, "DAPC1", "DAPC2", "Group", grp_colors, paths, "dapc.clusters",
-            label_centroids=False,
+            df.assign(_group=groups), "DAPC1", "DAPC2", "_group", grp_colors,
+            paths, "dapc.clusters", label_centroids=False, legend_title="Group",
         )
 
     plot_by_metadata(df, "DAPC1", "DAPC2", meta, paths, "dapc", "DAPC")
 
 
-def to_newick(node: ClusterNode, parent_height: float, leaf_names) -> str:
+def newick_label(name) -> str:
+    """
+    Newick tip label: quoted in single quotes (internal quotes doubled) if the
+    name contains whitespace or any of ``()[]':;,``, otherwise unchanged.
+    """
+    name = str(name)
+    if any(c.isspace() or c in NEWICK_SPECIAL for c in name):
+        return "'" + name.replace("'", "''") + "'"
+    return name
+
+
+def to_newick(root: ClusterNode, leaf_names) -> str:
     """
     Newick string of a SciPy cluster tree (without the final ``;``).
 
     Linkage heights are distances between clusters; UPGMA node heights are half
-    of them, so that the path between two leaves equals their distance.
+    of them, so that the path between two leaves equals their distance. Branch
+    lengths keep 10 significant digits. Built with an explicit stack, so deep
+    (ladder-shaped) trees do not hit the recursion limit.
     """
-    length = (parent_height - node.dist) / 2
-    if node.is_leaf():
-        return "%s:%.6f" % (leaf_names[node.id], length)
-    left = to_newick(node.get_left(), node.dist, leaf_names)
-    right = to_newick(node.get_right(), node.dist, leaf_names)
-    return "(%s,%s):%.6f" % (left, right, length)
+    parts = []
+    stack = [(root, root.dist)]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, str):
+            parts.append(item)
+            continue
+        node, parent_height = item
+        length = format((parent_height - node.dist) / 2, ".10g")
+        if node.is_leaf():
+            parts.append(f"{newick_label(leaf_names[node.id])}:{length}")
+        else:
+            parts.append("(")
+            stack += [f"):{length}", (node.get_right(), node.dist), ",",
+                      (node.get_left(), node.dist)]
+    return "".join(parts)
 
 
 def plot_tree(dist_matrix: np.ndarray, samples, paths) -> None:
@@ -322,7 +353,41 @@ def plot_tree(dist_matrix: np.ndarray, samples, paths) -> None:
 
     tree = to_tree(linkage_matrix, rd=False)
     with atomic_write(paths.table("upgma.nwk")) as f:
-        f.write(to_newick(tree, tree.dist, samples) + ";")
+        f.write(to_newick(tree, samples) + ";")
+
+
+def run_dapc(pca, pca_coords, samples, meta, paths):
+    """
+    DAPC: k-means clusters on the leading PCs (k by BIC), then LDA; writes the
+    coordinates and plots. Never exits: when DAPC is impossible (fewer than 2
+    PCs or fewer than 4 distinct samples) it logs a WARNING and returns None.
+
+    Returns:
+        The cluster labels, or None if DAPC was skipped.
+    """
+    log.info("Performing DAPC (PCA + LDA with KMeans)...")
+    if pca_coords.shape[1] < 2:
+        log.warning("WARNING: DAPC skipped: it needs at least 2 principal "
+                    "components.")
+        return None
+    n_pcs = dapc_n_pcs(pca.explained_variance_ratio_, len(samples))
+    dapc_input = pca_coords[:, :n_pcs]
+    grp, n_clusters = choose_dapc_clusters(dapc_input)
+    if grp is None:
+        log.warning("WARNING: DAPC skipped: it needs at least 4 genetically "
+                    "distinct samples.")
+        return None
+    log.info(
+        f"DAPC: {n_pcs} PCs ({pca.explained_variance_ratio_[:n_pcs].sum():.1%} "
+        f"of variance), k = {n_clusters} clusters by BIC, "
+        f"sizes {np.bincount(grp).tolist()}"
+    )
+
+    # Shrinkage keeps the within-group covariance invertible for tight clusters
+    lda = LinearDiscriminantAnalysis(n_components=2, solver="eigen", shrinkage="auto")
+    dapc_coords = lda.fit_transform(dapc_input, grp)
+    plot_dapc(dapc_coords, samples, meta, paths, groups=grp)
+    return grp
 
 
 def main() -> None:
@@ -340,40 +405,25 @@ def main() -> None:
     meta = load_metadata(args.meta, samples)
     safe_names(meta.columns)  # exits now if two columns give one file name
 
-    log.info("Performing PCA...")
     gt_matrix = alt_allele_counts(gt_array).T  # (n_samples, n_variants), -1 = missing
+    if len(samples) < 2:
+        die("structure needs at least 2 samples.")
     report_call_rates(gt_matrix, samples)
-    # Fail before any output if a pair of samples cannot be compared (the
-    # distances are computed again for the tree below; Phase 5 R6 joins them)
-    require_shared_sites(pairwise_differences(gt_matrix)[1], samples)
 
+    # The tree does not depend on PCA or DAPC (and is selection.py's input),
+    # so it is built first; a pair without shared sites stops before any output
+    log.info("Constructing UPGMA tree...")
+    divergence, _, compared = distance_matrices(gt_matrix)
+    require_shared_sites(compared, samples)
+    plot_tree(divergence, samples, paths)
+
+    log.info("Performing PCA...")
     n_components = min(10, *gt_matrix.shape)
     pca = PCA(n_components=n_components, random_state=42)
     pca_coords = pca.fit_transform(impute_missing(gt_matrix))
     plot_pca(pca_coords, samples, meta, paths)
 
-    log.info("Performing DAPC (PCA + LDA with KMeans)...")
-    if n_components < 2:
-        die("DAPC needs at least 2 principal components.")
-    n_pcs = dapc_n_pcs(pca.explained_variance_ratio_, len(samples))
-    dapc_input = pca_coords[:, :n_pcs]
-    grp, n_clusters = choose_dapc_clusters(dapc_input)
-    if grp is None:
-        die("DAPC needs at least 4 genetically distinct samples.")
-    log.info(
-        f"DAPC: {n_pcs} PCs ({pca.explained_variance_ratio_[:n_pcs].sum():.1%} "
-        f"of variance), k = {n_clusters} clusters by BIC, "
-        f"sizes {np.bincount(grp).tolist()}"
-    )
-
-    # Shrinkage keeps the within-group covariance invertible for tight clusters
-    lda = LinearDiscriminantAnalysis(n_components=2, solver="eigen", shrinkage="auto")
-    dapc_coords = lda.fit_transform(dapc_input, grp)
-    plot_dapc(dapc_coords, samples, meta, paths, groups=grp)
-
-    log.info("Constructing UPGMA tree...")
-    dist_matrix = compute_distance_matrix(gt_matrix)
-    plot_tree(dist_matrix, samples, paths)
+    run_dapc(pca, pca_coords, samples, meta, paths)
 
     log.info("Structure analysis complete.")
 

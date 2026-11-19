@@ -2,6 +2,9 @@ import numpy as np
 import pytest
 from Bio import Phylo
 
+from scipy.spatial.distance import squareform
+
+from popgen.genotypes import distance_matrices
 from popgen.io import ensure_output_dirs
 
 
@@ -21,7 +24,7 @@ def test_impute_missing_uses_column_mean(st):
 
 def test_newick_patristic_distance_equals_upgma(st, tmp_path):
     g = np.array([[0, 0, 0, 0], [0, 0, 0, 1], [1, 1, 1, 1]])
-    dist = st.compute_distance_matrix(g)
+    dist = squareform(distance_matrices(g)[0])
     st.plot_tree(dist, ["a", "b", "c"], ensure_output_dirs(tmp_path / "t"))
     tree = Phylo.read(str(tmp_path / "results" / "t.upgma.nwk"), "newick")
     assert tree.distance("a", "b") == pytest.approx(dist[0, 1])
@@ -60,8 +63,8 @@ def read_back(st, tmp_path, dist, names):
     return Phylo.read(str(tmp_path / "results" / "t.upgma.nwk"), "newick")
 
 
-@pytest.mark.xfail(strict=True, reason="B9")
 def test_newick_quotes_special_names(st, tmp_path):
+    """T-STR-1 (B9)."""
     names = ["a b", "c(1)", "d:x", "e'f", "g_h"]
     dist = ultrametric(1.0)
     tree = read_back(st, tmp_path, dist, names)
@@ -71,8 +74,8 @@ def test_newick_quotes_special_names(st, tmp_path):
             assert tree.distance(names[i], names[j]) == pytest.approx(dist[i, j])
 
 
-@pytest.mark.xfail(strict=True, reason="B9")
 def test_newick_keeps_short_branches(st, tmp_path):
+    """T-STR-2 (B9)."""
     names = list("abcde")
     dist = ultrametric(3e-7 / 0.8)  # distances 7.5e-8 .. 3e-7
     tree = read_back(st, tmp_path, dist, names)
@@ -88,8 +91,8 @@ def test_choose_dapc_clusters_needs_four_distinct(st):
     assert st.choose_dapc_clusters(coords) == (None, 0)
 
 
-@pytest.mark.xfail(strict=True, reason="B10")
 def test_three_samples_still_write_the_tree(tmp_path):
+    """T-STR-3 (B10)."""
     from conftest import PROJECT_ROOT, example_vcf_subset, run_script
 
     vcf = example_vcf_subset(tmp_path / "three.vcf", 3)
@@ -128,3 +131,34 @@ def test_failed_sample_exits_before_output(tmp_path):
     assert result.returncode != 0
     assert "S05" in result.stdout + result.stderr
     assert not [p for p in (tmp_path / "results").rglob("*") if p.is_file()]
+
+
+def test_newick_label(st):
+    assert st.newick_label("S01") == "S01"
+    assert st.newick_label("g_h") == "g_h"
+    assert st.newick_label("a b") == "'a b'"
+    assert st.newick_label("e'f") == "'e''f'"
+
+
+def test_newick_deep_ladder_tree(st, tmp_path):
+    """B9: an explicit stack, so a 1200-tip ladder does not hit the recursion limit."""
+    n = 1200
+    x = np.cumsum(np.arange(n, dtype=float))  # each tip joins the growing cluster
+    dist = np.abs(x[:, None] - x[None, :])
+    names = [f"s{i}" for i in range(n)]
+    tree = read_back(st, tmp_path, dist, names)
+    assert tree.count_terminals() == n
+
+
+def test_coordinate_named_metadata_column(st, tmp_path):
+    """B21 k: a metadata column named PC1 does not replace the coordinates."""
+    import pandas as pd
+
+    df = pd.DataFrame({"PC1": [0.0, 1.0, 2.0], "PC2": [0.0, 1.0, 0.0]},
+                      index=["a", "b", "c"])
+    meta = pd.DataFrame({"PC1": ["x", "y", None]},
+                        index=pd.Index(["a", "b", "c"], name="strain"))
+    st.plot_by_metadata(df, "PC1", "PC2", meta, ensure_output_dirs(tmp_path / "t"),
+                        "pca", "PCA")
+    assert df["PC1"].tolist() == [0.0, 1.0, 2.0]
+    assert (tmp_path / "results" / "png" / "t.pca.PC1.annotated.png").exists()

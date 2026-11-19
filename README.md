@@ -128,8 +128,9 @@ python scripts/diversity.py --vcf VCF --meta META --out PREFIX
 ```
 
 Writes `PREFIX.nd.tsv` (pairwise divergence per variant site) and
-`PREFIX.ss.tsv` (number of differing sites), and a heatmap of each, plain and
-with a colour bar for each metadata column.
+`PREFIX.ss.tsv` (number of differing sites), and a heatmap of each, ordered by
+average linkage (UPGMA) on the distances, plain and with a colour bar and legend
+for each metadata column.
 
 ### structure.py
 
@@ -139,7 +140,9 @@ python scripts/structure.py --vcf VCF --meta META --out PREFIX
 
 Writes PCA and DAPC coordinates (`PREFIX.pca.tsv`, `PREFIX.dapc.tsv`), scatter
 plots per metadata column with and without 95% ellipses, the DAPC clusters, and
-the UPGMA tree (`PREFIX.upgma.nwk` and a dendrogram).
+the UPGMA tree (`PREFIX.upgma.nwk` and a dendrogram). The tree is written first
+and does not depend on DAPC: with fewer than 4 genetically distinct samples
+DAPC is skipped with a warning (no `PREFIX.dapc.*` files).
 
 ### network.py
 
@@ -151,10 +154,14 @@ python scripts/network.py --vcf VCF [--meta META] [--contract N] [--distances K]
   (default 0: only identical genotypes).
 * `--distances K`: spring-layout node spacing (networkx `k`, default 1.0).
 * `--diameter D`: radius of the largest pie chart in layout units (default
-  0.001, which is very small; values around 0.02–0.1 are usually visible).
+  0.05).
 
 Writes the genotype groups (`PREFIX.genotype_summary.txt`) and one figure per
 metadata column (`PREFIX.<column>.msn.png/svg`).
+
+In `diversity.py`, `structure.py` and `network.py` a metadata category has the
+same colour in every figure (categories sorted alphabetically); samples without
+a value are drawn in grey as "unknown".
 
 ### ld_decay.py
 
