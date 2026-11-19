@@ -42,3 +42,77 @@ def test_choose_dapc_clusters_avoids_tiny_clusters(st):
     # a lone outlier: no k qualifies, k = 3 is used
     labels, k = st.choose_dapc_clusters(np.vstack([coords[:20], [[30, 30]]]))
     assert k == 3
+
+
+def ultrametric(scale):
+    """Distances of ((0,1),2) and (3,4): an ultrametric that UPGMA reproduces."""
+    d = np.full((5, 5), 0.8)
+    d[0, 1] = d[1, 0] = 0.2
+    d[[0, 1], 2] = d[2, [0, 1]] = 0.4
+    d[3, 4] = d[4, 3] = 0.3
+    np.fill_diagonal(d, 0)
+    return d * scale
+
+
+def read_back(st, tmp_path, dist, names):
+    paths = {k: str(tmp_path / "t") for k in ("png", "svg", "tsv")}
+    st.plot_tree(dist, names, paths)
+    return Phylo.read(str(tmp_path / "t.upgma.nwk"), "newick")
+
+
+@pytest.mark.xfail(strict=True, reason="B9")
+def test_newick_quotes_special_names(st, tmp_path):
+    names = ["a b", "c(1)", "d:x", "e'f", "g_h"]
+    dist = ultrametric(1.0)
+    tree = read_back(st, tmp_path, dist, names)
+    assert sorted(t.name for t in tree.get_terminals()) == sorted(names)
+    for i in range(5):
+        for j in range(i + 1, 5):
+            assert tree.distance(names[i], names[j]) == pytest.approx(dist[i, j])
+
+
+@pytest.mark.xfail(strict=True, reason="B9")
+def test_newick_keeps_short_branches(st, tmp_path):
+    names = list("abcde")
+    dist = ultrametric(3e-7 / 0.8)  # distances 7.5e-8 .. 3e-7
+    tree = read_back(st, tmp_path, dist, names)
+    for i in range(5):
+        for j in range(i + 1, 5):
+            got = tree.distance(names[i], names[j])
+            assert got > 0 and abs(got - dist[i, j]) < 1e-12
+
+
+def test_choose_dapc_clusters_needs_four_distinct(st):
+    points = np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]])
+    coords = np.repeat(points, 4, axis=0)  # 12 rows, 3 distinct
+    assert st.choose_dapc_clusters(coords) == (None, 0)
+
+
+@pytest.mark.xfail(strict=True, reason="B10")
+def test_three_samples_still_write_the_tree(tmp_path):
+    from conftest import PROJECT_ROOT, example_vcf_subset, run_script
+
+    vcf = example_vcf_subset(tmp_path / "three.vcf", 3)
+    meta = PROJECT_ROOT / "examples" / "data" / "metadata.tsv"
+    result = run_script("structure", tmp_path, "--vcf", vcf, "--meta", meta,
+                        "--out", tmp_path / "ex")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (tmp_path / "results" / "ex.upgma.nwk").exists()
+    assert not (tmp_path / "results" / "ex.dapc.tsv").exists()
+    log_text = next((tmp_path / "logs").iterdir()).read_text()
+    assert any("WARNING" in line and "DAPC" in line for line in log_text.splitlines())
+
+
+@pytest.mark.xfail(strict=True, reason="B11")
+def test_metadata_column_with_slash(tmp_path):
+    from conftest import PROJECT_ROOT, run_script
+
+    data = PROJECT_ROOT / "examples" / "data"
+    meta = tmp_path / "meta.tsv"
+    meta.write_text((data / "metadata.tsv").read_text()
+                    .replace("habitat", "host/substrate", 1))
+    result = run_script("structure", tmp_path, "--vcf", data / "example.vcf",
+                        "--meta", meta, "--out", tmp_path / "ex")
+    assert result.returncode == 0, result.stdout + result.stderr
+    png = tmp_path / "results" / "png" / "ex.pca.host_substrate.annotated.png"
+    assert png.exists()

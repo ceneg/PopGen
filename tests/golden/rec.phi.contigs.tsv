@@ -1,0 +1,3 @@
+contig	snps	informative	phi_obs	phi_mean	phi_z	p_phi	p_phi_holm	p_nss	p_maxchi	note
+ctg1	285	254	0.501	0.578	-17.5	0	0	<0.001	<0.001	
+ctg2	187	164	0.508	NA	NA	0.001	0.001	<0.001	<0.001	PHI by 1000 permutations

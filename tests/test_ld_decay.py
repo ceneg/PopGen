@@ -50,3 +50,11 @@ def test_windowed_ld_bins_match_direct_means(ld):
         assert n[k] == sel.sum()
         if sel.any():
             assert s[k] / n[k] == pytest.approx(r2[sel].mean())
+
+
+@pytest.mark.xfail(strict=True, reason="B5")
+def test_half_decay_none_when_peak_below_half(ld):
+    # Bin centres; the curve never exceeds 0.45, so it cannot fall to it.
+    x = np.arange(50, 1000, 100)
+    y = np.array([0.2, 0.3, 0.35, 0.3, 0.25, 0.2, 0.2, 0.15, 0.1, 0.1])
+    assert ld.half_decay_distance(x, y, 0.45) is None  # v1.01: 450

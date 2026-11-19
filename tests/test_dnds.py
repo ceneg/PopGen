@@ -116,3 +116,35 @@ def test_jukes_cantor():
     assert math.isnan(jukes_cantor(0.75))
     np.testing.assert_allclose(jukes_cantor(np.array([0.0, 0.2])),
                                [0.0, -0.75 * math.log(1 - 0.8 / 3)])
+
+
+SENSE = [a + b + c for a in "TCAG" for b in "TCAG" for c in "TCAG"
+         if a + b + c not in ("TAA", "TAG", "TGA")]
+
+
+def test_site_counts_of_sense_codons():
+    table = get_codon_table(1)
+    assert len(SENSE) == 61
+    for codon in SENSE:
+        s, n = count_site_types(codon, table)
+        assert 0 < s + n <= 3 + 1e-12
+
+
+def test_count_differences_symmetric():
+    table = get_codon_table(1)
+    rng = np.random.default_rng(7)
+    for _ in range(200):
+        a, b = rng.choice(SENSE, 2)
+        assert count_differences(a, b, table) == count_differences(b, a, table)
+
+
+def test_count_differences_three_positions():
+    # TTT (Phe) -> GGG (Gly), no path passes through a stop. Per path (S, N):
+    # 012: GTT GGT GGG = (1, 2); 021: GTT GTG GGG = (1, 2);
+    # 102: TGT GGT GGG = (1, 2); 120: TGT TGG GGG = (0, 3);
+    # 201: TTG GTG GGG = (0, 3); 210: TTG TGG GGG = (0, 3).
+    # Mean over 6 paths: S = 3/6, N = 15/6.
+    table = get_codon_table(1)
+    sd, nd = count_differences("TTT", "GGG", table)
+    assert sd == pytest.approx(0.5)
+    assert nd == pytest.approx(2.5)

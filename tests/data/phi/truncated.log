@@ -1,0 +1,12 @@
+Reading sequence file in.fa
+Found 24 sequences of length 285
+Alignment looks like a valid DNA alignment.
+Estimated diversity is (pairwise deletion - ignoring missing/ambig): 35.3%
+Found 254 informative sites.
+Writing alignment of informative sites to: Phi.inf.sites
+Writing list of informative sites to:      Phi.inf.list
+Calculating all pairwise incompatibilities...
+Done:   0.0% 63.3% 95.5%100.0%
+
+Distribution of scaled incompatibility scores:
+Score (%):

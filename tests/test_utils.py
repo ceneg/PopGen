@@ -5,6 +5,7 @@ from scipy.spatial.distance import pdist
 from src.utils import (
     alt_allele_counts,
     ensure_output_dirs,
+    load_metadata,
     pairwise_differences,
     read_vcf,
     setup_logging,
@@ -89,3 +90,97 @@ def test_alt_allele_counts_haploid_parsed_as_diploid():
 def test_alt_allele_counts_diploid():
     g = np.array([[[0, 1], [1, 1], [0, -1]]])
     np.testing.assert_array_equal(alt_allele_counts(g), [[1, 2, -1]])
+
+
+# --- Metadata (B1). load_metadata is moved to popgen.io in Phase 3. ---
+
+def write_meta(tmp_path, text):
+    path = tmp_path / "meta.tsv"
+    path.write_text(text)
+    return str(path)
+
+
+def test_load_metadata_follows_vcf_order(tmp_path):
+    meta = write_meta(tmp_path, "strain\tg\nB\tx\nZ\tz\nA\ty\n")
+    out = load_metadata(meta, ["A", "B"])
+    assert out.index.name == "strain"
+    assert list(out.index) == ["A", "B"]  # VCF order; surplus Z dropped
+    assert list(out["g"]) == ["y", "x"]
+
+
+@pytest.mark.xfail(strict=True, reason="B1")
+def test_load_metadata_numeric_names_stay_strings(tmp_path):
+    meta = write_meta(tmp_path, "strain\tyear\n101\t2019\n102\t2020\n")
+    out = load_metadata(meta, ["101", "102"])
+    assert list(out.index) == ["101", "102"]
+    assert list(out["year"]) == ["2019", "2020"]
+
+
+@pytest.mark.xfail(strict=True, reason="B1")
+def test_load_metadata_no_overlap_exits(tmp_path):
+    meta = write_meta(tmp_path, "strain\tyear\n101\t2019\n102\t2020\n")
+    with pytest.raises(SystemExit):
+        load_metadata(meta, ["X", "Y"])
+
+
+@pytest.mark.xfail(strict=True, reason="B1")
+def test_load_metadata_duplicate_strain_exits(tmp_path):
+    meta = write_meta(tmp_path, "strain\tg\nA\tx\nA\ty\nB\tz\n")
+    with pytest.raises(SystemExit):
+        load_metadata(meta, ["A", "B"])
+
+
+@pytest.mark.xfail(strict=True, reason="B1")
+def test_load_metadata_strain_only(tmp_path):
+    meta = write_meta(tmp_path, "strain\nA\nB\n")
+    out = load_metadata(meta, ["A", "B"])
+    assert out.shape == (2, 0)
+    assert list(out.index) == ["A", "B"]
+
+
+@pytest.mark.xfail(strict=True, reason="B1")
+def test_load_metadata_keeps_samples_without_metadata(tmp_path, caplog):
+    meta = write_meta(tmp_path, "strain\tg\nA\tx\nB\ty\n")
+    with caplog.at_level("WARNING"):
+        out = load_metadata(meta, ["A", "B", "C"])
+    assert list(out.index) == ["A", "B", "C"]
+    assert out.loc["C"].isna().all()
+    assert len([r for r in caplog.records if r.levelname == "WARNING"]) == 1
+
+
+# --- VCF reading ---
+
+def test_read_vcf_numalt_added_and_samples_only_read(tmp_path):
+    vcf = tmp_path / "multi.vcf"
+    vcf.write_text(VCF_HEADER + "c1\t5\t.\tA\tC,G\t.\tPASS\t.\tGT\t1\t2\n")
+    with pytest.raises(SystemExit):
+        read_vcf(str(vcf), fields=["samples", "calldata/GT", "variants/POS"])
+    samples, gt, _ = read_vcf(str(vcf), fields=["samples"])  # header only
+    assert list(samples) == ["A", "B"] and gt is None
+
+
+def test_read_vcf_empty_or_missing_exits(tmp_path):
+    header_only = tmp_path / "empty.vcf"
+    header_only.write_text(VCF_HEADER)
+    with pytest.raises(SystemExit):
+        read_vcf(str(header_only), fields=["samples", "calldata/GT"])
+    with pytest.raises(SystemExit):
+        read_vcf(str(tmp_path / "missing.vcf"), fields=["samples", "calldata/GT"])
+
+
+def test_read_vcf_gzip_same_as_plain(tmp_path):
+    import gzip
+
+    text = (VCF_HEADER + "c1\t5\t.\tA\tC\t.\tPASS\t.\tGT\t0\t1\n"
+            + "c1\t9\t.\tG\tT\t.\tPASS\t.\tGT\t1\t.\n")
+    plain = tmp_path / "v.vcf"
+    plain.write_text(text)
+    packed = tmp_path / "v.vcf.gz"
+    with gzip.open(packed, "wt") as f:
+        f.write(text)
+    fields = ["samples", "calldata/GT", "variants/POS"]
+    s1, g1, c1 = read_vcf(str(plain), fields=fields)
+    s2, g2, c2 = read_vcf(str(packed), fields=fields)
+    assert list(s1) == list(s2)
+    np.testing.assert_array_equal(np.asarray(g1), np.asarray(g2))
+    np.testing.assert_array_equal(c1["variants/POS"], c2["variants/POS"])

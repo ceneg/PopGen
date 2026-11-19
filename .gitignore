@@ -37,3 +37,6 @@ venv/
 .vscode/
 .idea/
 .DS_Store
+
+# Agent state: dev/memory.md (short index), notes and log. Local only.
+dev/
