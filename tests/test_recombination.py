@@ -325,3 +325,14 @@ def test_failed_phi_runs_exit_2_after_writing(rec, tmp_path, monkeypatch):
     assert "Phi runs failed: 2" in summary and "not tested" in summary
     table = (res / "rec.phi.contigs.tsv").read_text()
     assert table.count("Phi exit 3") == 2
+
+
+def test_interpret_too_few_sites_for_permutation_is_not_a_failure(rec):
+    """Phi exits 1 when even the permutation test has too few informative
+    sites (real data: 3-4 informative sites); that is no failed run."""
+    first = (DATA / "ctg2.log").read_text().split(rec.RERUN)[0]
+    rerun = rec.PhiRun(1, "Found 4 informative sites.\n\nERROR: Too few informative "
+                          "sites to test significance.  Try decreasing windowsize\n")
+    r = rec.interpret(rec.PhiRun(0, first), rerun, 1000)
+    assert r["p_phi_perm"] is None and not r["failed"]
+    assert r["note"] == "too few informative sites for PHI"

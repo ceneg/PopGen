@@ -191,6 +191,9 @@ def run_phi(phi, workdir, fasta, perms) -> tuple[int, str]:
 
 
 RERUN = "\n\n#### re-run with PHI permutation test ####\n"
+# Phi exits 1 with this when even its permutation test has too few sites:
+# a result ("too few informative sites for PHI"), not a failed run.
+TOO_FEW_TO_TEST = "Too few informative sites to test significance"
 ROW_STATS = ("phi_obs", "phi_mean", "phi_var", "p_phi_normal", "p_phi_perm",
              "p_nss", "p_maxchi")
 
@@ -300,7 +303,7 @@ def interpret(first: PhiRun, rerun: PhiRun | None, perms: int | None) -> dict:
         if p is not None:
             r["phi_mean"], r["phi_var"] = r2["phi_mean_perm"], r2["phi_var_perm"]
             note = f"PHI by {n} permutations"
-        elif rerun.rc != 0:
+        elif rerun.rc != 0 and TOO_FEW_TO_TEST not in rerun.out:
             note, failed = f"Phi exit {rerun.rc} (PHI permutation re-run)", True
         else:
             note = "too few informative sites for PHI"
