@@ -17,6 +17,7 @@ Requires a C compiler (``cc``, e.g. gcc or clang).
 
 import argparse
 import hashlib
+import http.client
 import io
 import logging
 import os
@@ -46,9 +47,11 @@ PHI_SOURCES = (
 VERSION_FILE = "PhiPack.version"  # read by scripts/generate_citations.py
 
 
-def download(urls: tuple[str, ...] = URLS, sha256: str = SHA256) -> bytes:
+def download(urls: tuple[str, ...] = URLS, sha256: str = SHA256,
+             opener=urllib.request.urlopen) -> bytes:
     """
     First archive from ``urls`` that downloads and matches ``sha256``.
+    ``opener`` is ``urllib.request.urlopen`` (replaceable in tests).
 
     Raises:
         RuntimeError: If no URL gives a verified archive.
@@ -56,9 +59,9 @@ def download(urls: tuple[str, ...] = URLS, sha256: str = SHA256) -> bytes:
     for url in urls:
         try:
             log.info(f"Downloading {url}")
-            with urllib.request.urlopen(url, timeout=60) as response:
+            with opener(url, timeout=60) as response:
                 data = response.read()
-        except OSError as e:
+        except (OSError, http.client.HTTPException) as e:  # e.g. IncompleteRead
             log.warning(f"  failed: {e}")
             continue
         try:
@@ -115,13 +118,29 @@ def build(src_dir: Path, cc: str) -> Path:
     return src_dir / "Phi"
 
 
-def install(archive: bytes, dest: Path, cc: str, sha256: str = SHA256) -> Path:
+def installed_by_us(dest: Path) -> bool:
+    """True if ``dest/Phi`` was installed by this tool (its version file)."""
+    version_file = dest / VERSION_FILE
+    return version_file.is_file() and "built from source" in version_file.read_text()
+
+
+def install(archive: bytes, dest: Path, cc: str, sha256: str = SHA256,
+            force: bool = False) -> Path:
     """
     Verify, unpack and compile the archive, and copy Phi to ``dest``.
 
     Returns:
         Path: The installed Phi program.
+
+    Raises:
+        RuntimeError: If ``dest`` holds a Phi not installed by this tool
+            (e.g. a conda environment's) and ``force`` is False.
     """
+    if (dest / "Phi").exists() and not installed_by_us(dest) and not force:
+        raise RuntimeError(
+            f"{dest / 'Phi'} exists and was not installed by this tool (for "
+            "example a conda package's); not overwritten. Use --force to "
+            "replace it, or --dest for another directory.")
     verify(archive, sha256)
     with tempfile.TemporaryDirectory(prefix="phipack.") as tmp:
         with tarfile.open(fileobj=io.BytesIO(archive), mode="r:gz") as tar:
@@ -167,6 +186,10 @@ def main() -> None:
     parser.add_argument(
         "--cc", default=os.environ.get("CC", "cc"), help="C compiler (default: cc)"
     )
+    parser.add_argument(
+        "--force", action="store_true",
+        help="Replace a Phi in --dest that this tool did not install",
+    )
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 
@@ -177,7 +200,7 @@ def main() -> None:
         )
     try:
         archive = args.source.read_bytes() if args.source else download()
-        phi = install(archive, args.dest, args.cc)
+        phi = install(archive, args.dest, args.cc, force=args.force)
         check(phi)
     except (OSError, RuntimeError, ValueError, subprocess.CalledProcessError) as e:
         sys.exit(f"Error: {e}")

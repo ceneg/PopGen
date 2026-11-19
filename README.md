@@ -64,7 +64,9 @@ python3 -m venv .venv
 bioconda mirror, or the authors' site if that fails), verifies its SHA-256
 checksum, compiles the `Phi` program and puts it into `.venv/bin/`. If the
 download fails, download `PhiPack.tar.gz` yourself and run
-`.venv/bin/python tools/install_phipack.py --source PhiPack.tar.gz`. PhiPack
+`.venv/bin/python tools/install_phipack.py --source PhiPack.tar.gz`. The
+installer does not replace a `Phi` in `.venv/bin/` that it did not build
+itself (for example one from a conda package) unless given `--force`. PhiPack
 is needed only by `recombination.py`; the other scripts work without it.
 
 **Check the installation** by running the tests (under a minute):
@@ -215,8 +217,9 @@ outputs; if no contig could be tested, the summary says "not tested".
 python scripts/generate_citations.py [--out FILE]
 ```
 
-Lists the package and program versions used by each script (default
-`results/citations.txt` in the current directory).
+Lists the package and program versions used by each script. The report is
+printed; with `--out FILE` it is written to that file instead (an existing
+file is overwritten).
 
 ## Repository layout
 

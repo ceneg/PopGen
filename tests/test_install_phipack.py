@@ -59,3 +59,53 @@ def test_install_builds_and_records_version(inst, tmp_path):
     inst.check(phi)
     assert "Usage" in subprocess.run([phi], capture_output=True, text=True).stdout
     assert (tmp_path / "bin" / inst.VERSION_FILE).read_text().startswith("PhiPack 1.1")
+
+
+class FakeResponse(io.BytesIO):
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def test_download_tries_next_url_after_incomplete_read(inst):
+    """T-PHI-1 (B21 e): IncompleteRead is not an OSError; the next URL is tried."""
+    import http.client
+
+    data = b"archive"
+    calls = []
+
+    def opener(url, timeout):
+        calls.append(url)
+        if url == "first":
+            raise http.client.IncompleteRead(b"part")
+        return FakeResponse(data)
+
+    sha = hashlib.sha256(data).hexdigest()
+    assert inst.download(("first", "second"), sha, opener=opener) == data
+    assert calls == ["first", "second"]
+
+
+def test_install_refuses_foreign_phi(inst, tmp_path):
+    """T-PHI-1 (B21 f): a Phi this tool did not install is not overwritten."""
+    dest = tmp_path / "bin"
+    dest.mkdir()
+    (dest / "Phi").write_text("conda's Phi")
+    archive = fake_archive(inst)
+    sha = hashlib.sha256(archive).hexdigest()
+    with pytest.raises(RuntimeError, match="--force"):
+        inst.install(archive, dest, "cc", sha256=sha)
+    assert (dest / "Phi").read_text() == "conda's Phi"
+
+
+@pytest.mark.skipif(shutil.which("cc") is None, reason="no C compiler")
+def test_install_replaces_own_or_forced_phi(inst, tmp_path):
+    archive = fake_archive(inst)
+    sha = hashlib.sha256(archive).hexdigest()
+    dest = tmp_path / "bin"
+    inst.install(archive, dest, "cc", sha256=sha)
+    inst.install(archive, dest, "cc", sha256=sha)  # own build: replaced silently
+    (dest / inst.VERSION_FILE).unlink()
+    inst.install(archive, dest, "cc", sha256=sha, force=True)
+    inst.check(dest / "Phi")
