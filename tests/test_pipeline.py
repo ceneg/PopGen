@@ -67,6 +67,8 @@ def test_ld_decay(outdir):
     stdout = run("ld_decay", tmp, "--vcf", VCF, "--out", tmp / "ld")
     binned = pd.read_csv(tmp / "results" / "ld.ld_decay.tsv", sep="\t")
     assert len(binned) > 50 and binned["r2"].between(0, 1).all()
+    assert list(binned.columns) == ["dist", "r2", "n_pairs"]
+    assert (binned["n_pairs"] > 0).all()
     assert "Half-decay distance" in stdout  # simulated recombination
 
 

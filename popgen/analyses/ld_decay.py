@@ -127,11 +127,17 @@ def calculate_windowed_ld(
 def half_decay_distance(x, y, half: float) -> float | None:
     """
     Distance at which the curve (x ascending) first falls to ``half`` after
-    its maximum, linearly interpolated. None if it never does.
+    its maximum, linearly interpolated. None if it never does, or if the
+    maximum is not above ``half`` (nothing to decay from; interpolating there
+    would extrapolate on the rising side of the peak).
     """
     x = np.asarray(x, dtype=float)
     y = np.asarray(y, dtype=float)
+    if len(x) == 0:
+        return None
     peak = int(np.argmax(y))
+    if y[peak] <= half:
+        return None
     below = np.nonzero(y[peak:] <= half)[0]
     if len(below) == 0:
         return None
@@ -148,12 +154,16 @@ def smooth_lowess(x, y, frac: float = 0.1) -> tuple[np.ndarray, np.ndarray]:
 
 
 def binned_means(r2_sum, n_pairs, bin_size: int = 100) -> pd.DataFrame:
-    """Mean r^2 per non-empty bin, at the bin centre (columns dist, r2)."""
+    """
+    Mean r^2 per non-empty bin, at the bin centre (columns dist, r2, n_pairs:
+    the number of SNP pairs in the bin).
+    """
     filled = np.flatnonzero(n_pairs)
     return pd.DataFrame(
         {
             "dist": filled * bin_size + bin_size / 2,
             "r2": r2_sum[filled] / n_pairs[filled],
+            "n_pairs": np.asarray(n_pairs)[filled].astype(np.int64),
         }
     )
 
@@ -162,6 +172,9 @@ def plot_ld_decay(r2_sum, n_pairs, paths, bin_size: int = 100) -> None:
     """
     Plot the binned mean r^2 with the half-decay distance of its LOWESS curve,
     and write the binned values to ``<prefix>.ld_decay.tsv``.
+
+    The threshold is half of the smoothed curve's maximum, so one sparse bin
+    (few pairs, r^2 near 1) cannot lift it above the curve.
     """
     log.info("Binning and plotting...")
 
@@ -179,11 +192,15 @@ def plot_ld_decay(r2_sum, n_pairs, paths, bin_size: int = 100) -> None:
         label="Mean $r^2$ (Binned)",
     )
 
-    try:
+    if len(binned) < 3:
+        log.info(f"Too few bins to smooth ({len(binned)}); no half-decay distance.")
+    else:
         sx, sy = smooth_lowess(binned["dist"], binned["r2"], frac=0.1)
 
-        max_r2 = binned["r2"].max()
+        max_r2 = float(sy.max())
         half_r2 = max_r2 / 2
+        log.info(f"Maximum r^2: smoothed {max_r2:.3f}, raw bins "
+                 f"{binned['r2'].max():.3f}")
 
         intersect_dist = half_decay_distance(sx, sy, half_r2)
 
@@ -201,13 +218,10 @@ def plot_ld_decay(r2_sum, n_pairs, paths, bin_size: int = 100) -> None:
             log.info(f"Half-decay distance: {intersect_dist:.0f} bp")
         else:
             log.info(
-                "Smoothed curve does not decay to half of the maximum r^2 "
+                "Smoothed curve does not decay to half of its maximum r^2 "
                 f"(max {max_r2:.3f}, {sy[-1]:.3f} at {sx[-1]:.0f} bp): LD extends "
                 "beyond the window; a larger --window may reach it."
             )
-
-    except Exception as e:
-        log.info(f"Smoothing failed: {e}")
 
     plt.xlabel("Distance (bp)")
     plt.ylabel("Linkage Disequilibrium ($r^2$)")
@@ -218,8 +232,8 @@ def plot_ld_decay(r2_sum, n_pairs, paths, bin_size: int = 100) -> None:
 
     save_figure(plt.gcf(), paths, "ld_decay")
 
-    write_table(binned[["dist", "r2"]], paths.table("ld_decay.tsv"), sep="\t",
-                index=False)
+    write_table(binned[["dist", "r2", "n_pairs"]], paths.table("ld_decay.tsv"),
+                sep="\t", index=False)
 
 
 def main() -> None:

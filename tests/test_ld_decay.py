@@ -52,12 +52,13 @@ def test_windowed_ld_bins_match_direct_means(ld):
             assert s[k] / n[k] == pytest.approx(r2[sel].mean())
 
 
-@pytest.mark.xfail(strict=True, reason="B5")
 def test_half_decay_none_when_peak_below_half(ld):
+    """T-LD-1 (B5)."""
     # Bin centres; the curve never exceeds 0.45, so it cannot fall to it.
     x = np.arange(50, 1000, 100)
     y = np.array([0.2, 0.3, 0.35, 0.3, 0.25, 0.2, 0.2, 0.15, 0.1, 0.1])
     assert ld.half_decay_distance(x, y, 0.45) is None  # v1.01: 450
+    assert ld.half_decay_distance([], [], 0.1) is None
 
 
 def test_filter_variants_haploid_and_diploid(ld):
@@ -98,3 +99,46 @@ def test_unsorted_vcf_exits(tmp_path):
     result = run_script("ld_decay", tmp_path, "--vcf", vcf, "--out", tmp_path / "ld")
     assert result.returncode != 0
     assert "not sorted" in result.stdout + result.stderr
+
+
+def logged_half_decay(ld, r2_sum, n_pairs, tmp_path, caplog):
+    import re
+
+    from popgen.io import ensure_output_dirs
+
+    caplog.clear()
+    with caplog.at_level("INFO", logger="ld_decay"):
+        ld.plot_ld_decay(r2_sum, n_pairs, ensure_output_dirs(tmp_path / "ld"))
+    found = re.findall(r"Half-decay distance: (\d+) bp", caplog.text)
+    assert len(found) == 1, caplog.text
+    return float(found[0])
+
+
+def test_sparse_outlier_bin_does_not_move_half_decay(ld, tmp_path, caplog):
+    """T-LD-2 (B5): one bin with one pair at r2 = 1 far out."""
+    import pandas as pd
+
+    centres = np.arange(100) * 100 + 50
+    n_pairs = np.full(100, 500)
+    # Bin means need some noise: on an exact curve LOWESS's robustness weights
+    # (residual / median residual) degenerate and keep the outlier
+    noise = np.random.default_rng(0).normal(0, 0.02, 100)
+    r2_sum = (0.05 + 0.6 * np.exp(-centres / 1500) + noise) * n_pairs
+    clean = logged_half_decay(ld, r2_sum, n_pairs, tmp_path, caplog)
+
+    r2_sum[90], n_pairs[90] = 1.0, 1
+    with_outlier = logged_half_decay(ld, r2_sum, n_pairs, tmp_path, caplog)
+    assert abs(with_outlier - clean) <= 100
+    table = pd.read_csv(tmp_path / "results" / "ld.ld_decay.tsv", sep="\t")
+    assert list(table.columns) == ["dist", "r2", "n_pairs"]
+    assert table["n_pairs"].sum() == n_pairs.sum()
+
+
+def test_too_few_bins_skips_smoothing(ld, tmp_path, caplog):
+    from popgen.io import ensure_output_dirs
+
+    with caplog.at_level("INFO", logger="ld_decay"):
+        ld.plot_ld_decay(np.array([0.5, 0.2]), np.array([1, 1]),
+                         ensure_output_dirs(tmp_path / "ld"))
+    assert "Too few bins to smooth" in caplog.text
+    assert (tmp_path / "results" / "ld.ld_decay.tsv").exists()

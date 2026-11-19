@@ -170,8 +170,10 @@ python scripts/ld_decay.py --vcf VCF --out PREFIX [--window BP] [--bin-size BP] 
 ```
 
 Defaults: 10,000 bp window, 100 bp bins, at least 2 samples with the alternate
-allele, all variants. Writes binned mean r² (`PREFIX.ld_decay.tsv`) and the
-decay plot; the half-decay distance is logged.
+allele, all variants. Writes binned mean r² (`PREFIX.ld_decay.tsv`: bin centre
+`dist`, mean `r2` and the number of SNP pairs `n_pairs`) and the decay plot;
+the half-decay distance (where the LOWESS curve falls to half of its own
+maximum) is logged.
 
 ### selection.py
 
