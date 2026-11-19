@@ -1,6 +1,6 @@
 # PopGen: population-genomic analyses of SNP data
 
-[![Version](https://img.shields.io/badge/version-1.01-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.10-blue.svg)](CHANGELOG.md)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](requirements.txt)
 
@@ -225,9 +225,11 @@ file is overwritten).
 
 ```
 scripts/      command-line entry points (thin wrappers, one per analysis)
-popgen/       the package: VCF and metadata reading (io.py), genotypes and
-              distances (genotypes.py), logging (runlog.py), Nei-Gojobori
-              counting (dnds.py); the analyses themselves in popgen/analyses/
+popgen/       the package: VCF and metadata reading and output paths (io.py),
+              genotypes and distances (genotypes.py), logging (runlog.py),
+              option types (cli.py), figure saving and colours (plotting.py),
+              PhiPack discovery (external.py), Nei-Gojobori counting
+              (dnds.py); the analyses themselves in popgen/analyses/
 tests/        pytest suite (unit tests and end-to-end runs on the example data)
 tools/        PhiPack installer
 examples/     simulated example dataset and the script that generates it
