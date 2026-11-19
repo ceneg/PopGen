@@ -196,9 +196,10 @@ Lists the package and program versions used by each script (default
 ## Repository layout
 
 ```
-scripts/      command-line analyses (one per analysis)
-src/          shared code: VCF reading, distances, logging (utils.py),
-              Nei-Gojobori counting (dnds.py), input checks (validators.py)
+scripts/      command-line entry points (thin wrappers, one per analysis)
+popgen/       the package: shared code for VCF reading, distances, logging
+              (utils.py), Nei-Gojobori counting (dnds.py), input checks
+              (validators.py); the analyses themselves in popgen/analyses/
 tests/        pytest suite (unit tests and end-to-end runs on the example data)
 tools/        PhiPack installer
 examples/     simulated example dataset and the script that generates it
@@ -211,8 +212,13 @@ CHANGELOG.md  release notes
 ```bash
 .venv/bin/python -m pytest -q        # tests
 .venv/bin/pip install flake8         # linting (not needed to run the scripts)
-.venv/bin/flake8 scripts src tests examples tools
+.venv/bin/flake8 scripts popgen tests examples tools
 ```
+
+Installing the package is optional: the scripts run from the checkout as is.
+`.venv/bin/pip install -e . --no-deps` additionally provides the commands
+`popgen-diversity`, `popgen-structure`, `popgen-network`, `popgen-ld-decay`,
+`popgen-selection`, `popgen-recombination` and `popgen-citations`.
 
 ## Citation
 

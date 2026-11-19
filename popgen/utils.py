@@ -17,6 +17,9 @@ import psutil
 log = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+# Run from a checkout (scripts/ next to the package): logs go to <checkout>/logs;
+# when installed elsewhere, to ./logs
+_IN_CHECKOUT = (PROJECT_ROOT / "scripts").is_dir()
 LOG_PACKAGES = ("numpy", "pandas", "scipy", "scikit-allel", "scikit-learn",
                 "biopython", "networkx", "statsmodels", "matplotlib", "seaborn")
 # Peak memory of read_vcf + downstream arrays, as a multiple of the VCF size
@@ -34,13 +37,16 @@ def setup_logging(script: str, args=None, log_dir: str | None = None) -> Path:
         script: Script name used for the log file name.
         args: Parsed ``argparse`` namespace to record, or None.
         log_dir: Directory for the log file (default: the ``POPGEN_LOG_DIR``
-            environment variable if set, otherwise ``<project>/logs``).
+            environment variable if set, otherwise ``<checkout>/logs``, or
+            ``./logs`` when the package is installed outside a checkout).
 
     Returns:
         Path: The log file.
     """
     log_dir = log_dir or os.environ.get("POPGEN_LOG_DIR")
-    log_dir = Path(log_dir) if log_dir else PROJECT_ROOT / "logs"
+    if not log_dir:
+        log_dir = PROJECT_ROOT / "logs" if _IN_CHECKOUT else Path.cwd() / "logs"
+    log_dir = Path(log_dir)
     log_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     log_file = log_dir / f"{script}_{stamp}_{os.getpid()}.log"

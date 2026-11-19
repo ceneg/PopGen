@@ -34,7 +34,7 @@ def validate_metadata(meta_path, strict=True):
 def validate_vcf(vcf_path):
     """
     Validate that the VCF file exists and is not empty (its content is checked
-    when ``src.utils.read_vcf`` parses it).
+    when ``popgen.utils.read_vcf`` parses it).
     """
     if not os.path.exists(vcf_path):
         raise FileNotFoundError(f"VCF file not found: {vcf_path}")

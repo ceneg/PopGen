@@ -1,22 +1,16 @@
-import pytest
-import os
-import sys
-
-# Add parent to path
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-
 import math
 
 import numpy as np
+import pytest
 
-from src.dnds import (
+from popgen.dnds import (
     jukes_cantor,
     calculate_pairwise_dnds,
     count_differences,
     count_site_types,
     get_codon_table,
 )
-from src.validators import validate_metadata
+from popgen.validators import validate_metadata
 
 
 # Mock Data

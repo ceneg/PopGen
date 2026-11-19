@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 from scipy.spatial.distance import pdist
 
-from src.utils import (
+from popgen.utils import (
     alt_allele_counts,
     ensure_output_dirs,
     load_metadata,

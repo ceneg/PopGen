@@ -11,7 +11,7 @@ import pandas as pd
 import pytest
 
 from conftest import PROJECT_ROOT
-from src.utils import find_phi
+from popgen.utils import find_phi
 
 DATA = PROJECT_ROOT / "examples" / "data"
 VCF = DATA / "example.vcf"

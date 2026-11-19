@@ -1,5 +1,44 @@
-# Tool configuration only: the scripts run from a checkout and are not an
-# installable package (see README.md for installation).
+# Installation is optional: the scripts in scripts/ run from a checkout as is.
+# requirements.txt holds the tested, pinned versions (see README.md).
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "popgen"
+dynamic = ["version"]
+description = "Population-genomic analyses of haploid SNP data in VCF format"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy",
+    "scipy",
+    "pandas",
+    "scikit-allel",
+    "scikit-learn",
+    "biopython",
+    "networkx",
+    "statsmodels",
+    "matplotlib",
+    "seaborn",
+    "psutil",
+]
+
+[project.scripts]
+popgen-diversity = "popgen.analyses.diversity:main"
+popgen-structure = "popgen.analyses.structure:main"
+popgen-network = "popgen.analyses.network:main"
+popgen-ld-decay = "popgen.analyses.ld_decay:main"
+popgen-selection = "popgen.analyses.selection:main"
+popgen-recombination = "popgen.analyses.recombination:main"
+popgen-citations = "popgen.analyses.citations:main"
+
+[tool.setuptools.dynamic]
+version = {attr = "popgen.__version__"}
+
+[tool.setuptools.packages.find]
+include = ["popgen*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

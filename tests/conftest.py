@@ -1,4 +1,4 @@
-import importlib.util
+import importlib
 import sys
 from pathlib import Path
 
@@ -9,17 +9,12 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 
 def _load(name):
-    path = PROJECT_ROOT / "scripts" / f"{name}.py"
-    spec = importlib.util.spec_from_file_location(f"scripts_{name}", path)
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module  # so worker processes can pickle its functions
-    spec.loader.exec_module(module)
-    return module
+    return importlib.import_module(f"popgen.analyses.{name}")
 
 
 @pytest.fixture(scope="session")
 def load_script():
-    """Import a script from scripts/ by name (scripts/ is not a package)."""
+    """Import an analysis module (``popgen.analyses.<name>``) by name."""
     return _load
 
 
