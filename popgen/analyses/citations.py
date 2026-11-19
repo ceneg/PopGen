@@ -5,9 +5,7 @@ script in scripts/ uses, for the methods section of a paper.
 """
 import argparse
 import ast
-import glob
 import importlib.metadata
-import os
 import platform
 import re
 import shutil
@@ -15,10 +13,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from popgen.utils import find_phi
-
-# Written by tools/install_phipack.py next to the Phi program it builds
-PHI_VERSION_FILE = "PhiPack.version"
+from popgen.external import find_phi, phi_version
 
 
 def get_stdlib_modules():
@@ -98,50 +93,15 @@ def scan_imports_recursive(script_path, project_root):
     stdlib = get_stdlib_modules()
     while todo:
         path = todo.pop()
-        if path in seen or not os.path.exists(path):
+        if path in seen or not Path(path).exists():
             continue
         seen.add(path)
         for mod in scan_imports(path):
             if mod.startswith("popgen."):
-                todo.append(os.path.join(project_root, *mod.split(".")) + ".py")
+                todo.append(str(Path(project_root, *mod.split("."))) + ".py")
             elif mod not in stdlib and mod not in ("popgen", "scripts"):
                 found.add(mod)
     return found
-
-
-def get_conda_version(package_name):
-    """
-    Try to look up version in conda list.
-    """
-    if not shutil.which("conda"):
-        return None
-
-    try:
-        # Check specific package: conda list -p PREFIX package_name
-        # use sys.prefix to dynamically target the current active environment
-        # This is robust and not hardcoded.
-        result = subprocess.run(
-            ["conda", "list", "-p", sys.prefix, package_name],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        # Parse output:
-        # # packages in environment at ...
-        # #
-        # # Name                    Version                   Build  Channel
-        # phipack                   1.1                  h7b50bb2_6    bioconda
-
-        for line in result.stdout.splitlines():
-            if line.startswith("#"):
-                continue
-            parts = line.split()
-            if len(parts) >= 2 and parts[0] == package_name:
-                return parts[1]
-
-    except Exception:
-        pass
-    return None
 
 
 def get_phi_version():
@@ -152,10 +112,7 @@ def get_phi_version():
     path = find_phi()
     if not path:
         return None
-    version_file = Path(path).with_name(PHI_VERSION_FILE)
-    if version_file.is_file():
-        return f"{version_file.read_text().strip()} (found at {path})"
-    v = get_conda_version("phipack")
+    v = phi_version(path)
     if v:
         return f"{v} (found at {path})"
     return f"Detected at {path} (version unknown)"
@@ -194,18 +151,17 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__.strip())
     parser.add_argument(
         "--out",
-        default=os.path.join("results", "citations.txt"),
+        default=str(Path("results", "citations.txt")),
         help="Report file (default: results/citations.txt in the current "
         "directory; an existing file is overwritten)",
     )
     args = parser.parse_args()
 
     # Determine project root based on script location (for finding scripts)
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    scripts_dir = script_dir
+    scripts_dir = Path(__file__).absolute().parent
 
-    out_file = os.path.abspath(args.out)
-    os.makedirs(os.path.dirname(out_file), exist_ok=True)
+    out_file = Path(args.out).absolute()
+    out_file.parent.mkdir(parents=True, exist_ok=True)
 
     # Map scripts to external tools
     external_tools_map = {
@@ -219,18 +175,18 @@ def main():
     report_lines.append("=" * 60)
     report_lines.append("")
 
-    script_files = sorted(glob.glob(os.path.join(scripts_dir, "*.py")))
+    script_files = sorted(str(p) for p in scripts_dir.glob("*.py"))
 
     if not script_files:
         print(f"Warning: No scripts found in {scripts_dir}")
 
     for script_path in script_files:
-        val_name = os.path.basename(script_path)
-        if val_name in ("__init__.py", os.path.basename(__file__)):
+        val_name = Path(script_path).name
+        if val_name in ("__init__.py", Path(__file__).name):
             continue
 
         external_imports = scan_imports_recursive(
-            script_path, os.path.dirname(os.path.dirname(scripts_dir))
+            script_path, str(scripts_dir.parents[1])
         )
 
         # Check for external tools

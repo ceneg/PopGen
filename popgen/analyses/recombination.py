@@ -40,18 +40,20 @@ are refused, because unphased heterozygotes are not haplotypes.
 import argparse
 import math
 import logging
-import os
 import re
 import shutil
 import subprocess
-import sys
 import tempfile
 import threading
+from pathlib import Path
 
 import numpy as np
 import psutil
 
-from popgen.utils import ensure_output_dirs, find_phi, read_vcf, setup_logging
+from popgen.cli import add_out_argument, fraction, positive_float, positive_int
+from popgen.external import find_phi, phi_version
+from popgen.io import atomic_write, ensure_output_dirs, read_vcf, safe_name
+from popgen.runlog import die, setup_logging
 
 log = logging.getLogger("recombination")
 
@@ -131,8 +133,8 @@ def haplotypes(gt):
         a, b = g[:, :, 0], g[:, :, 1]
         het = (a >= 0) & (b >= 0) & (a != b)
         if het.any():
-            sys.exit(
-                f"Error: {int(het.sum())} heterozygous genotype calls. PhiPack "
+            die(
+                f"{int(het.sum())} heterozygous genotype calls. PhiPack "
                 "needs haplotypes; phase the data or use haploid calls."
             )
         return a
@@ -189,18 +191,18 @@ def test_contig(contig, samples, h, tmp, logdir, perms_fallback, resume) -> dict
     permutation test where the normal approximation is unavailable. With
     ``resume``, a complete earlier log of the same alignment is reused.
     """
-    name = re.sub(r"[^\w.-]", "_", contig)
-    d = os.path.join(tmp, name)
-    log = os.path.join(logdir, f"{name}.log")
-    prev = open(log).read().split(RERUN) if resume and os.path.exists(log) else []
+    name = safe_name(contig)
+    d = Path(tmp) / name
+    log = Path(logdir) / f"{name}.log"
+    prev = log.read_text().split(RERUN) if resume and log.exists() else []
     same = f"Found {len(samples)} sequences of length {h.shape[0]}"
 
     def phi(i, perms):
         if len(prev) > i and same in prev[i] and "p-Value(s)" in prev[i]:
             return 0, prev[i]  # complete output of this same alignment (--resume)
-        if not os.path.exists(os.path.join(d, "in.fa")):
-            os.makedirs(d)
-            write_fasta(os.path.join(d, "in.fa"), samples, h)
+        if not (d / "in.fa").exists():
+            d.mkdir()
+            write_fasta(d / "in.fa", samples, h)
         return run_phi(d, "in.fa", perms)  # Phi writes Phi.* into its cwd
 
     rc, out = phi(0, 0)
@@ -221,7 +223,7 @@ def test_contig(contig, samples, h, tmp, logdir, perms_fallback, resume) -> dict
         r["p_phi_perm"] = p
         note = (f"PHI by {perms_fallback} permutations" if p is not None
                 else "too few informative sites for PHI")
-    with open(log, "w") as f:
+    with atomic_write(log) as f:
         f.write(out)
     shutil.rmtree(d, ignore_errors=True)
     r.update(contig=contig, snps=h.shape[0], note=note)
@@ -242,33 +244,37 @@ def main() -> None:
     global PHI
     ap = argparse.ArgumentParser(description="PhiPack recombination tests, per contig.")
     ap.add_argument("--vcf", required=True, help="Input VCF (haploid, biallelic)")
-    ap.add_argument("--out", required=True, help="Output prefix")
-    ap.add_argument("--subset", type=float, default=1.0,
-                    help="Keep every 1/subset-th SNP per contig (default: all; "
-                         "only for a contig too large for RAM)")
-    ap.add_argument("--jobs", type=int, default=8,
+    add_out_argument(ap)
+    ap.add_argument("--subset", type=fraction, default=1.0,
+                    help="Keep every n-th SNP per contig, n = ceil(1/subset) "
+                         "(default: all; only for a contig too large for RAM); "
+                         "unlike ld_decay.py --subset, which draws SNPs at random")
+    ap.add_argument("--jobs", type=positive_int, default=8,
                     help="Contigs run in parallel (at most)")
-    ap.add_argument("--max-ram", type=float, default=None,
+    ap.add_argument("--max-ram", type=positive_float, default=None,
                     help="GB that running Phi processes may use together "
                          "(default: 80%% of the memory available at start)")
     ap.add_argument("--resume", action="store_true",
                     help="Reuse complete Phi logs of the same alignments in "
                          "<out>.phi.logs/")
-    ap.add_argument("--min-snps", type=int, default=2,
+    ap.add_argument("--min-snps", type=positive_int, default=2,
                     help="Skip contigs with fewer SNPs "
                          "(default 2: PHI needs site pairs)")
-    ap.add_argument("--max-informative", type=int, default=PHI_MAX_INFORMATIVE,
+    ap.add_argument("--max-informative", type=positive_int, default=PHI_MAX_INFORMATIVE,
                     help="Split larger contigs into consecutive segments with at "
                          f"most this many informative sites (default "
                          f"{PHI_MAX_INFORMATIVE}: Phi's statistics overflow above)")
     args = ap.parse_args()
+    if args.max_informative > PHI_MAX_INFORMATIVE:
+        ap.error(f"--max-informative must be <= {PHI_MAX_INFORMATIVE} "
+                 "(Phi's statistics overflow above)")
     setup_logging("recombination", args)
 
     PHI = find_phi()
     if PHI is None:
-        sys.exit("Error: PhiPack's 'Phi' program not found (install it with "
-                 "tools/install_phipack.py, see README.md).")
-    log.info(f"Using {PHI}")
+        die("PhiPack's 'Phi' program not found (install it with "
+            "tools/install_phipack.py, see README.md).")
+    log.info(f"Using {PHI} (PhiPack version: {phi_version(PHI) or 'unknown'})")
 
     paths = ensure_output_dirs(args.out)
     samples, gt, cs = read_vcf(args.vcf, fields=["samples", "calldata/GT",
@@ -279,7 +285,10 @@ def main() -> None:
         log.warning(f"Warning: {int((h < 0).sum())} missing calls written as N.")
 
     contigs = list(dict.fromkeys(chrom))  # VCF order
-    step = int(round(1 / args.subset)) if args.subset < 1 else 1
+    step = max(1, math.ceil(1 / args.subset - 1e-9))
+    if step > 1:
+        log.info(f"--subset {args.subset}: one SNP in {step} per contig is used "
+                 f"(fraction {1 / step:.3g}).")
     max_ram = args.max_ram * GB if args.max_ram else 0.8 * mem_available()
     work, too_big, order, n_split = [], [], {}, 0
     for ci, c in enumerate(contigs):
@@ -297,9 +306,9 @@ def main() -> None:
     # A permutation p is >= 1/perms; Holm needs m * p < 0.05, so perms > 20 m.
     perms = max(PERM_DEFAULT, 40 * len(work))
 
-    logdir = f"{paths['base']}.phi.logs"
-    os.makedirs(logdir, exist_ok=True)
-    tmp = tempfile.mkdtemp(prefix="phi.", dir=os.path.dirname(paths["base"]))
+    logdir = paths.table("phi.logs")
+    logdir.mkdir(exist_ok=True)
+    tmp = tempfile.mkdtemp(prefix="phi.", dir=paths.results)
     log.info(f"Testing {len(work)} contigs or segments of {len(contigs)} contigs "
              f"({n_split} split; < {args.min_snps} SNPs skipped), "
              f"up to {args.jobs} at a time "
@@ -335,8 +344,8 @@ def main() -> None:
 
     cols = ["contig", "snps", "informative", "phi_obs", "phi_mean", "phi_z",
             "p_phi", "p_phi_holm", "p_nss", "p_maxchi", "note"]
-    tsv = f"{paths['tsv']}.phi.contigs.tsv"
-    with open(tsv, "w") as fh:
+    tsv = paths.table("phi.contigs.tsv")
+    with atomic_write(tsv) as fh:
         fh.write("\t".join(cols) + "\n")
         for r in res:
             vals = []
@@ -362,18 +371,19 @@ def main() -> None:
         f"{n_split}; tests (contigs or segments) run: {len(work)}; "
         f"too large for --max-ram: {len(too_big)}; "
         f"with a PHI p-value: {len(tested)}",
-        f"SNPs used: {'all' if step == 1 else f'every {step}th'} per contig; "
+        f"SNPs used: {'all' if step == 1 else f'every {step}th'} per contig"
+        f"{'' if step == 1 else f' (fraction {1 / step:.3g})'}; "
         f"PHI window: 100 SNPs (Phi default)",
         f"Contigs or segments with significant PHI (Holm-adjusted p < 0.05): "
         f"{len(sig)} of {len(tested)}",
         f"Clonality (no recombination on any contig): "
         f"{'rejected' if sig else 'not rejected'} (smallest Holm p = {lo:.3g})",
-        f"Per contig: {os.path.basename(tsv)}; Phi output: {os.path.basename(logdir)}/",
+        f"Per contig: {tsv.name}; Phi output: {logdir.name}/",
     ]
     if lo == 0:
         lines.insert(-1, "p = 0: smaller than the smallest p that Phi's normal "
                          "approximation prints.")
-    with open(f"{paths['tsv']}.phi.summary.txt", "w") as fh:
+    with atomic_write(paths.table("phi.summary.txt")) as fh:
         fh.write("\n".join(lines) + "\n")
     log.info("\n".join(lines))
     log.info("Recombination analysis complete.")

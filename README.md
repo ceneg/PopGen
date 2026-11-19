@@ -109,11 +109,17 @@ and the metadata is a tab-separated file with a `strain` column.
 **Output location.** `--out DIR/NAME` writes the tables to
 `DIR/results/NAME.*` and the figures to `DIR/results/png/` and
 `DIR/results/svg/`. A bare `--out NAME` writes to `./results/`. Existing files
-with the same names are overwritten.
+with the same names are overwritten. Tables are written under a temporary
+name (`*.tmp`) and renamed when complete, so an interrupted run leaves no
+truncated table. In file names, metadata column names have every run of
+characters other than letters, digits, `_`, `.` and `-` replaced by `_`
+(`host/substrate` gives `host_substrate`); titles and legends keep the
+original names.
 
-**Logs.** Every run writes its command, parameters, Python and package versions
-and messages to `logs/<script>_<timestamp>_<pid>.log` in the repository, or to
-the directory named by the environment variable `POPGEN_LOG_DIR`.
+**Logs.** Every run writes the PopGen version, its command, working directory,
+parameters, Python and package versions, its messages, warnings and any error
+to `logs/<script>_<timestamp>_<pid>.log` in the repository, or to the directory
+named by the environment variable `POPGEN_LOG_DIR`.
 
 ### diversity.py
 
@@ -182,7 +188,9 @@ Requires PhiPack's `Phi` (installed by `tools/install_phipack.py` into
 (`PREFIX.phi.contigs.tsv`), a summary (`PREFIX.phi.summary.txt`) and Phi's
 output for each contig (`PREFIX.phi.logs/`). Phi's permutation tests can take
 hours for contigs with tens of thousands of informative sites; `--resume`
-reuses finished contigs after an interruption.
+reuses finished contigs after an interruption. `--subset FRACTION` keeps one
+SNP in ceil(1/FRACTION) per contig (`ld_decay.py --subset` instead draws that
+fraction of variants at random).
 
 ### generate_citations.py
 

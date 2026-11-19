@@ -18,14 +18,18 @@ import pandas as pd
 from networkx.algorithms.tree import minimum_spanning_tree as nx_mst
 from scipy.spatial.distance import squareform
 
-from popgen.utils import (
-    alt_allele_counts,
+from popgen.cli import add_out_argument, non_negative_int, positive_float
+from popgen.io import (
+    OutputPaths,
+    atomic_write,
     ensure_output_dirs,
-    load_metadata,
-    pairwise_differences,
     read_vcf,
-    setup_logging,
+    safe_name,
+    safe_names,
 )
+from popgen.plotting import save_figure
+from popgen.runlog import setup_logging
+from popgen.utils import alt_allele_counts, load_metadata, pairwise_differences
 
 log = logging.getLogger("network")
 
@@ -133,7 +137,7 @@ def draw_msn(
     cluster_map: dict[str, str],
     metadata: pd.DataFrame,
     column: str,
-    paths: dict[str, str],
+    paths: OutputPaths,
     layout_scale: float = 1.0,
     diameter_scale: float = 0.001,
 ) -> None:
@@ -222,9 +226,7 @@ def draw_msn(
     plt.legend(title=column, loc="center left", bbox_to_anchor=(1.0, 0.5))
     plt.axis("off")
 
-    plt.savefig(f"{paths['png']}.{column}.msn.png")
-    plt.savefig(f"{paths['svg']}.{column}.msn.svg")
-    plt.close()
+    save_figure(plt.gcf(), paths, f"{safe_name(column)}.msn")
 
 
 def main() -> None:
@@ -235,20 +237,20 @@ def main() -> None:
     parser.add_argument("--meta", help="Metadata file")
     parser.add_argument(
         "--contract",
-        type=int,
+        type=non_negative_int,
         default=0,
         help="Collapse samples differing at <= this many sites (default 0)",
     )
-    parser.add_argument("--out", type=str, default="msn", help="Output file prefix")
+    add_out_argument(parser, required=False, default="msn")
     parser.add_argument(
         "--distances",
-        type=float,
+        type=positive_float,
         default=1.0,
         help="Spring-layout optimal node distance (networkx k)",
     )
     parser.add_argument(
         "--diameter",
-        type=float,
+        type=positive_float,
         default=0.001,
         help="Radius of the largest pie chart in layout units (default 0.001)",
     )
@@ -261,8 +263,8 @@ def main() -> None:
 
     cluster_map, clusters = collapse_sequences(samples, gt, args.contract)
 
-    summary_out = f"{paths['tsv']}.genotype_summary.txt"
-    with open(summary_out, "w") as f:
+    summary_out = paths.table("genotype_summary.txt")
+    with atomic_write(summary_out) as f:
         gen_to_samples = defaultdict(list)
         for sample, gid in cluster_map.items():
             gen_to_samples[gid].append(sample)
@@ -277,6 +279,7 @@ def main() -> None:
 
     if args.meta:
         meta = load_metadata(args.meta, samples).reset_index()
+        safe_names(c for c in meta.columns if c != "strain")
     else:
         meta = pd.DataFrame({"strain": samples, "group": ["default"] * len(samples)})
 

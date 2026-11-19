@@ -9,10 +9,8 @@ import copy
 import logging
 import math
 import multiprocessing as mp
-import os
-import sys
-import warnings
 from collections import defaultdict
+from pathlib import Path
 
 import matplotlib
 
@@ -26,7 +24,10 @@ from scipy.cluster.hierarchy import dendrogram, linkage
 from scipy.spatial.distance import squareform
 
 from popgen.dnds import calculate_pairwise_dnds, jukes_cantor
-from popgen.utils import ensure_output_dirs, read_vcf, setup_logging
+from popgen.cli import add_out_argument
+from popgen.io import ensure_output_dirs, read_vcf, safe_name, write_table
+from popgen.plotting import save_figure
+from popgen.runlog import die, setup_logging
 
 log = logging.getLogger("selection")
 
@@ -42,11 +43,9 @@ def load_reference_genome(fasta_path: str) -> dict[str, str]:
             rec.id: str(rec.seq).upper() for rec in SeqIO.parse(fasta_path, "fasta")
         }
     except Exception as e:
-        log.error(f"Error loading reference genome: {e}")
-        sys.exit(1)
+        die(f"could not load the reference genome: {e}")
     if not ref_genome:
-        log.error(f"Error: no sequences found in {fasta_path}")
-        sys.exit(1)
+        die(f"no sequences found in {fasta_path}")
     log.info(f"Loaded {len(ref_genome)} contigs.")
     return ref_genome
 
@@ -112,8 +111,7 @@ def parse_gff(gff_path: str) -> dict[str, list[dict]]:
         return genes
 
     except Exception as e:
-        log.error(f"Error parsing GFF: {e}")
-        sys.exit(1)
+        die(f"could not parse the GFF: {e}")
 
 
 def reconstruct_genomes_from_vcf(vcf_path: str, ref_genome: dict[str, str]) -> tuple:
@@ -484,14 +482,9 @@ def plot_and_save_dendrogram(tree, df, paths, metric_col, title_suffix) -> None:
     plt.title(f"Phylogenetic Tree Annotated with {title_suffix}", fontsize=16)
     plt.tight_layout()
 
-    safe_metric = metric_col.replace("/", "_")
-    png_file = f"{paths['png']}.{safe_metric}.upgma.png"
-    svg_file = f"{paths['svg']}.{safe_metric}.upgma.svg"
-
-    plt.savefig(png_file, bbox_inches="tight", dpi=300)
-    plt.savefig(svg_file, bbox_inches="tight")
-    plt.close()
-    log.info(f"Saved {safe_metric} tree to {png_file}")
+    stem = f"{safe_name(metric_col)}.upgma"
+    save_figure(plt.gcf(), paths, stem, bbox_inches="tight", png_kwargs={"dpi": 300})
+    log.info(f"Saved {metric_col} tree to {paths.png(stem)}")
 
 
 def validate_tree(nwk: str, vcf: str):
@@ -503,17 +496,15 @@ def validate_tree(nwk: str, vcf: str):
         The Bio.Phylo tree.
     """
     log.info(f"Validating tree file: {nwk}...")
-    if not os.path.exists(nwk):
-        log.error(f"ERROR: Tree file '{nwk}' does not exist.")
-        sys.exit(1)
+    if not Path(nwk).exists():
+        die(f"Tree file '{nwk}' does not exist.")
 
     try:
         tree = Phylo.read(nwk, "newick")
         tree_samples = {term.name for term in tree.get_terminals()}
 
         if not tree_samples:
-            log.error("ERROR: Tree contains no terminal nodes (samples).")
-            sys.exit(1)
+            die("Tree contains no terminal nodes (samples).")
 
         log.info("Checking sample consistency...")
         vcf_samples, _, _ = read_vcf(vcf, fields=["samples"])
@@ -521,10 +512,9 @@ def validate_tree(nwk: str, vcf: str):
 
         common = tree_samples.intersection(vcf_samples_set)
         if not common:
-            log.error("ERROR: No common samples found between Tree and VCF.")
             log.info(f"Tree samples (first 5): {list(tree_samples)[:5]}")
             log.info(f"VCF samples (first 5): {list(vcf_samples)[:5]}")
-            sys.exit(1)
+            die("No common samples found between Tree and VCF.")
 
         # Partial overlap is allowed: tips without results are labelled N/A,
         # VCF samples absent from the tree are only in the TSV output.
@@ -546,8 +536,7 @@ def validate_tree(nwk: str, vcf: str):
         return tree
 
     except Exception as e:
-        log.error(f"ERROR: Invalid tree file: {e}")
-        sys.exit(1)
+        die(f"Invalid tree file: {e}")
 
 
 def main() -> None:
@@ -556,9 +545,8 @@ def main() -> None:
     parser.add_argument("--gff", required=True, help="Input GFF")
     parser.add_argument("--fasta", required=True, help="Reference FASTA")
     parser.add_argument("--nwk", required=True, help="Newick tree")
-    parser.add_argument("--out", required=True, help="Output prefix")
+    add_out_argument(parser)
     args = parser.parse_args()
-    warnings.filterwarnings("ignore", category=UserWarning)  # Biopython warnings
     setup_logging("selection", args)
 
     paths = ensure_output_dirs(args.out)
@@ -581,17 +569,17 @@ def main() -> None:
     results_df = calculate_dnds_for_genomes(ref_genome, genomes_data, genes)
 
     # Save TSV (genes with at least one difference from the reference)
-    out_tsv = f"{paths['tsv']}.tsv"
+    out_tsv = paths.table("tsv")
     if results_df.empty:
         changed_df = results_df
     else:
         changed_df = results_df[(results_df["pN"] > 0) | (results_df["pS"] > 0)]
-    changed_df.to_csv(out_tsv, sep="\t", index=False)
+    write_table(changed_df, out_tsv, sep="\t", index=False)
     log.info(f"dN/dS results saved to {out_tsv}")
 
     if not changed_df.empty:
         strain_df = summarise_by_strain(results_df)
-        strain_df.to_csv(f"{paths['tsv']}.summary.tsv", sep="\t")
+        write_table(strain_df, paths.table("summary.tsv"), sep="\t")
 
         try:
             tree = Phylo.read(args.nwk, "newick")

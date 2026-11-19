@@ -1,4 +1,5 @@
-import os
+from pathlib import Path
+
 import pandas as pd
 
 
@@ -7,7 +8,7 @@ def validate_metadata(meta_path, strict=True):
     Validate metadata file structure and content.
     Returns True if valid, raises error or returns False if invalid.
     """
-    if not os.path.exists(meta_path):
+    if not Path(meta_path).exists():
         raise FileNotFoundError(f"Metadata file not found: {meta_path}")
 
     try:
@@ -34,12 +35,12 @@ def validate_metadata(meta_path, strict=True):
 def validate_vcf(vcf_path):
     """
     Validate that the VCF file exists and is not empty (its content is checked
-    when ``popgen.utils.read_vcf`` parses it).
+    when ``popgen.io.read_vcf`` parses it).
     """
-    if not os.path.exists(vcf_path):
+    if not Path(vcf_path).exists():
         raise FileNotFoundError(f"VCF file not found: {vcf_path}")
 
-    if os.path.getsize(vcf_path) == 0:
+    if Path(vcf_path).stat().st_size == 0:
         raise ValueError("VCF file is empty.")
 
     return True

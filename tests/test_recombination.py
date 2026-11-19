@@ -99,3 +99,20 @@ def test_run_scheduled_reraises_after_others_finish(rec):
     with pytest.raises(RuntimeError, match="boom"):
         rec.run_scheduled(work, 2, 10, fn)
     assert sorted(done) == ["x", "y"]
+
+
+@pytest.mark.parametrize("option", [
+    ["--jobs", "0"],
+    ["--max-informative", "0"],
+    ["--max-informative", "50000"],
+    ["--subset", "0"],
+])
+def test_bad_numeric_option_is_usage_error(tmp_path, option):
+    """T-REC-6 (B15): rejected before any work (--jobs 0 used to hang)."""
+    from conftest import PROJECT_ROOT, run_script
+
+    vcf = PROJECT_ROOT / "examples" / "data" / "example.vcf"
+    result = run_script("recombination", tmp_path, "--vcf", vcf,
+                        "--out", tmp_path / "rec", *option, timeout=60)
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert not (tmp_path / "results").exists()

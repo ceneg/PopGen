@@ -16,7 +16,10 @@ import numpy as np
 import pandas as pd
 import statsmodels.api as sm
 
-from popgen.utils import ensure_output_dirs, read_vcf, setup_logging
+from popgen.cli import add_out_argument, fraction, non_negative_int, positive_int
+from popgen.io import ensure_output_dirs, read_vcf, write_table
+from popgen.plotting import save_figure
+from popgen.runlog import setup_logging
 
 log = logging.getLogger("ld_decay")
 
@@ -236,31 +239,33 @@ def plot_ld_decay(r2_sum, n_pairs, paths, bin_size: int = 100) -> None:
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
 
-    plt.savefig(f"{paths['png']}.ld_decay.png")
-    plt.savefig(f"{paths['svg']}.ld_decay.svg")
-    plt.close()
+    save_figure(plt.gcf(), paths, "ld_decay")
 
-    binned[["dist", "r2"]].to_csv(f"{paths['tsv']}.ld_decay.tsv", sep="\t", index=False)
+    write_table(binned[["dist", "r2"]], paths.table("ld_decay.tsv"), sep="\t",
+                index=False)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Calculate and visualize LD decay.")
     parser.add_argument("--vcf", required=True, help="Input VCF")
-    parser.add_argument("--out", required=True, help="Output prefix")
+    add_out_argument(parser)
     parser.add_argument(
-        "--window", type=int, default=10000, help="Max distance (bp) for LD calculation"
+        "--window", type=positive_int, default=10000,
+        help="Max distance (bp) for LD calculation",
     )
     parser.add_argument(
-        "--bin-size", type=int, default=100, help="Bin size (bp) for plotting"
+        "--bin-size", type=positive_int, default=100, help="Bin size (bp) for plotting"
     )
     parser.add_argument(
-        "--min-samples", type=int, default=2, help="Min samples with non-ref allele"
+        "--min-samples", type=non_negative_int, default=2,
+        help="Min samples with non-ref allele",
     )
     parser.add_argument(
         "--subset",
-        type=float,
+        type=fraction,
         default=1.0,
-        help="Subset fraction of variants (random downsampling)",
+        help="Fraction (0-1] of variants to keep, drawn at random (seed 42); "
+        "unlike recombination.py --subset, which keeps every n-th SNP",
     )
     args = parser.parse_args()
     setup_logging("ld_decay", args)

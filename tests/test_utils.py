@@ -2,20 +2,7 @@ import numpy as np
 import pytest
 from scipy.spatial.distance import pdist
 
-from popgen.utils import (
-    alt_allele_counts,
-    ensure_output_dirs,
-    load_metadata,
-    pairwise_differences,
-    read_vcf,
-    setup_logging,
-)
-
-VCF_HEADER = (
-    "##fileformat=VCFv4.2\n"
-    '##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">\n'
-    "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tA\tB\n"
-)
+from popgen.utils import alt_allele_counts, load_metadata, pairwise_differences
 
 
 def test_pairwise_differences_no_missing():
@@ -40,45 +27,6 @@ def test_pairwise_differences_chunked_matches_unchunked():
     for chunk in (1, 7, 50):
         for a, b in zip(pairwise_differences(g, chunk=chunk), full):
             np.testing.assert_array_equal(a, b)
-
-
-def test_setup_logging_writes_run_details(tmp_path):
-    import argparse
-    import logging
-
-    log_file = setup_logging("demo", argparse.Namespace(vcf="x.vcf"), tmp_path)
-    logging.getLogger("demo").info("hello")
-    for h in logging.getLogger().handlers:
-        h.flush()
-    text = log_file.read_text()
-    assert "Parameters: {'vcf': 'x.vcf'}" in text
-    assert "numpy=" in text and "hello" in text
-    root = logging.getLogger()
-    for h in list(root.handlers):
-        root.removeHandler(h)
-        h.close()
-
-
-def test_read_vcf_rejects_multiallelic(tmp_path):
-    vcf = tmp_path / "multi.vcf"
-    vcf.write_text(VCF_HEADER + "c1\t5\t.\tA\tC,G\t.\tPASS\t.\tGT\t1\t2\n")
-    with pytest.raises(SystemExit):
-        read_vcf(str(vcf), fields=["samples", "calldata/GT"])
-
-
-def test_read_vcf_biallelic(tmp_path):
-    vcf = tmp_path / "ok.vcf"
-    vcf.write_text(VCF_HEADER + "c1\t5\t.\tA\tC\t.\tPASS\t.\tGT\t0\t1\n")
-    samples, gt, _ = read_vcf(str(vcf), fields=["samples", "calldata/GT"])
-    assert list(samples) == ["A", "B"]
-    assert gt.shape[:2] == (1, 2)
-
-
-def test_ensure_output_dirs(tmp_path):
-    paths = ensure_output_dirs(str(tmp_path / "run"))
-    assert (tmp_path / "results" / "png").is_dir()
-    assert (tmp_path / "results" / "svg").is_dir()
-    assert paths["tsv"] == str(tmp_path / "results" / "run")
 
 
 def test_alt_allele_counts_haploid_parsed_as_diploid():
@@ -146,41 +94,3 @@ def test_load_metadata_keeps_samples_without_metadata(tmp_path, caplog):
     assert list(out.index) == ["A", "B", "C"]
     assert out.loc["C"].isna().all()
     assert len([r for r in caplog.records if r.levelname == "WARNING"]) == 1
-
-
-# --- VCF reading ---
-
-def test_read_vcf_numalt_added_and_samples_only_read(tmp_path):
-    vcf = tmp_path / "multi.vcf"
-    vcf.write_text(VCF_HEADER + "c1\t5\t.\tA\tC,G\t.\tPASS\t.\tGT\t1\t2\n")
-    with pytest.raises(SystemExit):
-        read_vcf(str(vcf), fields=["samples", "calldata/GT", "variants/POS"])
-    samples, gt, _ = read_vcf(str(vcf), fields=["samples"])  # header only
-    assert list(samples) == ["A", "B"] and gt is None
-
-
-def test_read_vcf_empty_or_missing_exits(tmp_path):
-    header_only = tmp_path / "empty.vcf"
-    header_only.write_text(VCF_HEADER)
-    with pytest.raises(SystemExit):
-        read_vcf(str(header_only), fields=["samples", "calldata/GT"])
-    with pytest.raises(SystemExit):
-        read_vcf(str(tmp_path / "missing.vcf"), fields=["samples", "calldata/GT"])
-
-
-def test_read_vcf_gzip_same_as_plain(tmp_path):
-    import gzip
-
-    text = (VCF_HEADER + "c1\t5\t.\tA\tC\t.\tPASS\t.\tGT\t0\t1\n"
-            + "c1\t9\t.\tG\tT\t.\tPASS\t.\tGT\t1\t.\n")
-    plain = tmp_path / "v.vcf"
-    plain.write_text(text)
-    packed = tmp_path / "v.vcf.gz"
-    with gzip.open(packed, "wt") as f:
-        f.write(text)
-    fields = ["samples", "calldata/GT", "variants/POS"]
-    s1, g1, c1 = read_vcf(str(plain), fields=fields)
-    s2, g2, c2 = read_vcf(str(packed), fields=fields)
-    assert list(s1) == list(s2)
-    np.testing.assert_array_equal(np.asarray(g1), np.asarray(g2))
-    np.testing.assert_array_equal(c1["variants/POS"], c2["variants/POS"])

@@ -18,14 +18,15 @@ def load_script():
     return _load
 
 
-def run_script(script, tmp, *args, cwd=None):
+def run_script(script, tmp, *args, cwd=None, timeout=None):
     """Run scripts/<script>.py with logs in tmp/logs; return the CompletedProcess."""
     import os
     import subprocess
 
     env = dict(os.environ, POPGEN_LOG_DIR=str(Path(tmp) / "logs"))
     cmd = [sys.executable, str(PROJECT_ROOT / "scripts" / f"{script}.py"), *args]
-    return subprocess.run(cmd, capture_output=True, text=True, env=env, cwd=cwd)
+    return subprocess.run(cmd, capture_output=True, text=True, env=env, cwd=cwd,
+                          timeout=timeout)
 
 
 def example_vcf_subset(path, n_samples):

@@ -5,7 +5,6 @@ a UPGMA tree written as Newick (the tree input of selection.py).
 
 import argparse
 import logging
-import sys
 
 import matplotlib
 
@@ -23,14 +22,17 @@ from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
 
-from popgen.utils import (
-    alt_allele_counts,
+from popgen.cli import add_out_argument
+from popgen.io import (
+    atomic_write,
     ensure_output_dirs,
-    load_metadata,
-    pairwise_differences,
     read_vcf,
-    setup_logging,
+    safe_names,
+    write_table,
 )
+from popgen.plotting import save_figure
+from popgen.runlog import die, setup_logging
+from popgen.utils import alt_allele_counts, load_metadata, pairwise_differences
 
 log = logging.getLogger("structure")
 
@@ -177,11 +179,12 @@ def make_color_map(values) -> dict:
     return dict(zip(values, sns.color_palette(palette, n_colors)))
 
 
-def scatter_groups(df, x, y, hue, color_map, out_png, out_svg, title=None,
+def scatter_groups(df, x, y, hue, color_map, paths, stem, title=None,
                    ellipses=True, label_centroids=True, alpha=0.6):
     """
     Scatter plot coloured by ``hue``, optionally with a 95% ellipse and a
-    centroid marker for every group with more than two members.
+    centroid marker for every group with more than two members; saved as
+    ``<stem>.png/svg``.
     """
     plt.figure(figsize=(12, 12))
     ax = plt.gca()
@@ -221,27 +224,23 @@ def scatter_groups(df, x, y, hue, color_map, out_png, out_svg, title=None,
     if title:
         plt.title(title)
     plt.tight_layout(rect=[0, 0, 0.85, 1])
-    plt.savefig(out_png, bbox_inches="tight")
-    plt.savefig(out_svg, bbox_inches="tight")
-    plt.close()
+    save_figure(plt.gcf(), paths, stem, bbox_inches="tight")
 
 
 def plot_by_metadata(df, x, y, meta, paths, prefix, label) -> None:
     """Annotated (ellipses) and simple scatter plots for every metadata column."""
+    file_names = safe_names(meta.columns)
     for column in meta.columns:
         df[column] = meta[column]
         color_map = make_color_map(df[column].dropna().unique())
+        stem = f"{prefix}.{file_names[column]}"
 
         scatter_groups(
-            df, x, y, column, color_map,
-            f"{paths['png']}.{prefix}.{column}.annotated.png",
-            f"{paths['svg']}.{prefix}.{column}.annotated.svg",
+            df, x, y, column, color_map, paths, f"{stem}.annotated",
             title=f"{label} - {column} (with 95% Ellipses)",
         )
         scatter_groups(
-            df, x, y, column, color_map,
-            f"{paths['png']}.{prefix}.{column}.png",
-            f"{paths['svg']}.{prefix}.{column}.svg",
+            df, x, y, column, color_map, paths, stem,
             ellipses=False,
             alpha=0.5,
         )
@@ -252,15 +251,13 @@ def plot_pca(coords, samples, meta, paths) -> None:
     n_components = coords.shape[1]
     cols = [f"PC{i+1}" for i in range(n_components)]
     df = pd.DataFrame(coords, columns=cols, index=samples)
-    df.to_csv(f"{paths['tsv']}.pca.tsv", sep="\t")
+    write_table(df, paths.table("pca.tsv"), sep="\t")
 
     plt.figure(figsize=(10, 10))
     sns.scatterplot(x="PC1", y="PC2", data=df, alpha=0.5)
     plt.gca().set_aspect("equal", adjustable="datalim")
     plt.tight_layout()
-    plt.savefig(f"{paths['png']}.pca.png", bbox_inches="tight")
-    plt.savefig(f"{paths['svg']}.pca.svg", bbox_inches="tight")
-    plt.close()
+    save_figure(plt.gcf(), paths, "pca", bbox_inches="tight")
 
     plot_by_metadata(df, "PC1", "PC2", meta, paths, "pca", "PCA")
 
@@ -268,7 +265,7 @@ def plot_pca(coords, samples, meta, paths) -> None:
 def plot_dapc(coords, samples, meta, paths, groups=None) -> None:
     """Write the DAPC coordinates and plot them by cluster and metadata column."""
     df = pd.DataFrame(coords, columns=["DAPC1", "DAPC2"], index=samples)
-    df.to_csv(f"{paths['tsv']}.dapc.tsv", sep="\t")
+    write_table(df, paths.table("dapc.tsv"), sep="\t")
 
     if groups is not None:
         df["Group"] = groups
@@ -276,9 +273,7 @@ def plot_dapc(coords, samples, meta, paths, groups=None) -> None:
         palette = sns.color_palette("tab20", len(unique_grps))
         grp_colors = dict(zip(unique_grps, palette))
         scatter_groups(
-            df, "DAPC1", "DAPC2", "Group", grp_colors,
-            f"{paths['png']}.dapc.clusters.png",
-            f"{paths['svg']}.dapc.clusters.svg",
+            df, "DAPC1", "DAPC2", "Group", grp_colors, paths, "dapc.clusters",
             label_centroids=False,
         )
 
@@ -317,12 +312,10 @@ def plot_tree(dist_matrix: np.ndarray, samples, paths) -> None:
     plt.title("UPGMA Tree (Hamming Distance)")
     plt.xlabel("Distance")
     plt.tight_layout()
-    plt.savefig(f"{paths['png']}.upgma.png", bbox_inches="tight")
-    plt.savefig(f"{paths['svg']}.upgma.svg", bbox_inches="tight")
-    plt.close()
+    save_figure(plt.gcf(), paths, "upgma", bbox_inches="tight")
 
     tree = to_tree(linkage_matrix, rd=False)
-    with open(f"{paths['tsv']}.upgma.nwk", "w") as f:
+    with atomic_write(paths.table("upgma.nwk")) as f:
         f.write(to_newick(tree, tree.dist, samples) + ";")
 
 
@@ -332,13 +325,14 @@ def main() -> None:
     )
     parser.add_argument("--vcf", required=True, help="Input VCF file")
     parser.add_argument("--meta", required=True, help="Metadata file")
-    parser.add_argument("--out", required=True, help="Output prefix")
+    add_out_argument(parser)
     args = parser.parse_args()
     setup_logging("structure", args)
 
     paths = ensure_output_dirs(args.out)
     samples, gt_array, _ = read_vcf(args.vcf, fields=["samples", "calldata/GT"])
     meta = load_metadata(args.meta, samples)
+    safe_names(meta.columns)  # exits now if two columns give one file name
 
     log.info("Performing PCA...")
     gt_matrix = alt_allele_counts(gt_array).T  # (n_samples, n_variants), -1 = missing
@@ -350,14 +344,12 @@ def main() -> None:
 
     log.info("Performing DAPC (PCA + LDA with KMeans)...")
     if n_components < 2:
-        sys.exit("Error: DAPC needs at least 2 principal components.")
+        die("DAPC needs at least 2 principal components.")
     n_pcs = dapc_n_pcs(pca.explained_variance_ratio_, len(samples))
     dapc_input = pca_coords[:, :n_pcs]
     grp, n_clusters = choose_dapc_clusters(dapc_input)
     if grp is None:
-        sys.exit(
-            "Error: DAPC needs at least 4 genetically distinct samples."
-        )
+        die("DAPC needs at least 4 genetically distinct samples.")
     log.info(
         f"DAPC: {n_pcs} PCs ({pca.explained_variance_ratio_[:n_pcs].sum():.1%} "
         f"of variance), k = {n_clusters} clusters by BIC, "

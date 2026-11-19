@@ -5,7 +5,6 @@ heatmaps (plain and with a colour bar per metadata column).
 
 import argparse
 import logging
-import warnings
 
 import matplotlib
 
@@ -16,18 +15,11 @@ import pandas as pd
 import seaborn as sns
 from scipy.spatial.distance import squareform
 
-from popgen.utils import (
-    alt_allele_counts,
-    ensure_output_dirs,
-    load_metadata,
-    pairwise_differences,
-    read_vcf,
-    setup_logging,
-)
-
-# seaborn's clustermap warns about large or tied matrices
-warnings.filterwarnings("ignore", category=UserWarning)
-warnings.filterwarnings("ignore", module="seaborn")
+from popgen.cli import add_out_argument
+from popgen.io import OutputPaths, ensure_output_dirs, read_vcf, safe_names, write_table
+from popgen.plotting import save_figure
+from popgen.runlog import setup_logging
+from popgen.utils import alt_allele_counts, load_metadata, pairwise_differences
 
 log = logging.getLogger("diversity")
 
@@ -63,7 +55,7 @@ def plot_heatmap(
     samples,
     meta: pd.DataFrame,
     title: str,
-    paths: dict[str, str],
+    paths: OutputPaths,
     suffix: str,
     color_by: str | None = None,
 ) -> None:
@@ -76,7 +68,7 @@ def plot_heatmap(
         meta: Metadata indexed by sample.
         title: Colour-bar label.
         paths: From ``ensure_output_dirs``.
-        suffix: File-name suffix after the output prefix.
+        suffix: File-name part after the output name.
         color_by: Metadata column for a row colour bar, or None.
     """
     df = pd.DataFrame(squareform(matrix), index=samples, columns=samples)
@@ -103,9 +95,8 @@ def plot_heatmap(
         )
 
     plt.setp(g.ax_heatmap.get_xticklabels(), rotation=90)
-    g.savefig(f"{paths['png']}.{suffix}.png")
-    g.savefig(f"{paths['svg']}.{suffix}.svg")
-    plt.close(g.fig)
+    # bbox_inches="tight" is the default of seaborn's own Grid.savefig
+    save_figure(g.fig, paths, suffix, bbox_inches="tight")
 
 
 def main() -> None:
@@ -114,13 +105,14 @@ def main() -> None:
     )
     parser.add_argument("--vcf", required=True, help="Input VCF file")
     parser.add_argument("--meta", required=True, help="Metadata file")
-    parser.add_argument("--out", required=True, help="Output prefix")
+    add_out_argument(parser)
     args = parser.parse_args()
     setup_logging("diversity", args)
 
     paths = ensure_output_dirs(args.out)
     samples, gt, _ = read_vcf(args.vcf, fields=["samples", "calldata/GT"])
     meta = load_metadata(args.meta, samples)
+    file_names = safe_names(meta.columns)
 
     log.info("Computing distance matrices...")
     divergence, differences = compute_distance_matrices(gt)
@@ -129,14 +121,16 @@ def main() -> None:
         ("nd", divergence, ND_LABEL),
         ("ss", differences, SS_LABEL),
     ):
-        pd.DataFrame(squareform(matrix), index=samples, columns=samples).to_csv(
-            f"{paths['tsv']}.{suffix}.tsv", sep="\t"
+        write_table(
+            pd.DataFrame(squareform(matrix), index=samples, columns=samples),
+            paths.table(f"{suffix}.tsv"), sep="\t",
         )
-        log.info(f"Plotting heatmaps for {paths['base']}.{suffix}...")
+        log.info(f"Plotting heatmaps for {paths.table(suffix)}...")
         plot_heatmap(matrix, samples, meta, label, paths, suffix)
         for col in meta.columns:
             plot_heatmap(
-                matrix, samples, meta, label, paths, f"{suffix}.{col}", color_by=col
+                matrix, samples, meta, label, paths, f"{suffix}.{file_names[col]}",
+                color_by=col,
             )
 
     log.info("Diversity analysis complete.")

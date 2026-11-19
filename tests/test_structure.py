@@ -2,6 +2,8 @@ import numpy as np
 import pytest
 from Bio import Phylo
 
+from popgen.io import ensure_output_dirs
+
 
 @pytest.fixture(scope="module")
 def st(load_script):
@@ -20,9 +22,8 @@ def test_impute_missing_uses_column_mean(st):
 def test_newick_patristic_distance_equals_upgma(st, tmp_path):
     g = np.array([[0, 0, 0, 0], [0, 0, 0, 1], [1, 1, 1, 1]])
     dist = st.compute_distance_matrix(g)
-    paths = {k: str(tmp_path / "t") for k in ("png", "svg", "tsv")}
-    st.plot_tree(dist, ["a", "b", "c"], paths)
-    tree = Phylo.read(str(tmp_path / "t.upgma.nwk"), "newick")
+    st.plot_tree(dist, ["a", "b", "c"], ensure_output_dirs(tmp_path / "t"))
+    tree = Phylo.read(str(tmp_path / "results" / "t.upgma.nwk"), "newick")
     assert tree.distance("a", "b") == pytest.approx(dist[0, 1])
 
 
@@ -55,9 +56,8 @@ def ultrametric(scale):
 
 
 def read_back(st, tmp_path, dist, names):
-    paths = {k: str(tmp_path / "t") for k in ("png", "svg", "tsv")}
-    st.plot_tree(dist, names, paths)
-    return Phylo.read(str(tmp_path / "t.upgma.nwk"), "newick")
+    st.plot_tree(dist, names, ensure_output_dirs(tmp_path / "t"))
+    return Phylo.read(str(tmp_path / "results" / "t.upgma.nwk"), "newick")
 
 
 @pytest.mark.xfail(strict=True, reason="B9")
@@ -103,7 +103,6 @@ def test_three_samples_still_write_the_tree(tmp_path):
     assert any("WARNING" in line and "DAPC" in line for line in log_text.splitlines())
 
 
-@pytest.mark.xfail(strict=True, reason="B11")
 def test_metadata_column_with_slash(tmp_path):
     from conftest import PROJECT_ROOT, run_script
 
