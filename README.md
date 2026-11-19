@@ -200,9 +200,14 @@ Requires PhiPack's `Phi` (installed by `tools/install_phipack.py` into
 (`PREFIX.phi.contigs.tsv`), a summary (`PREFIX.phi.summary.txt`) and Phi's
 output for each contig (`PREFIX.phi.logs/`). Phi's permutation tests can take
 hours for contigs with tens of thousands of informative sites; `--resume`
-reuses finished contigs after an interruption. `--subset FRACTION` keeps one
+reuses finished contigs after an interruption. A log is reused only for the
+same alignment (each log starts with a checksum of the contig's genotypes), so
+a changed VCF re-runs the changed contigs; logs written by PopGen 1.01 are not
+reused. `--subset FRACTION` keeps one
 SNP in ceil(1/FRACTION) per contig (`ld_decay.py --subset` instead draws that
-fraction of variants at random).
+fraction of variants at random). If a Phi run fails, the summary counts it
+("Phi runs failed") and the script exits with status 2 after writing its
+outputs; if no contig could be tested, the summary says "not tested".
 
 ### generate_citations.py
 

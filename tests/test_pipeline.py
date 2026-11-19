@@ -91,3 +91,6 @@ def test_recombination(outdir):
     tsv = pd.read_csv(tmp / "results" / "rec.phi.contigs.tsv", sep="\t")
     assert list(tsv["contig"]) == ["ctg1", "ctg2"]
     assert (tsv["p_phi_holm"] < 0.05).all()  # simulated recombination
+    assert tsv["phi_mean"].notna().all()  # ctg2: the permutation mean (B6)
+    summary = (tmp / "results" / "rec.phi.summary.txt").read_text()
+    assert "Phi runs failed: 0" in summary
