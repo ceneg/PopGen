@@ -115,3 +115,16 @@ def test_metadata_column_with_slash(tmp_path):
     assert result.returncode == 0, result.stdout + result.stderr
     png = tmp_path / "results" / "png" / "ex.pca.host_substrate.annotated.png"
     assert png.exists()
+
+
+def test_failed_sample_exits_before_output(tmp_path):
+    """T-STR-5 (B8)."""
+    from conftest import PROJECT_ROOT, example_vcf_failed_sample, run_script
+
+    vcf = example_vcf_failed_sample(tmp_path / "failed.vcf", "S05")
+    meta = PROJECT_ROOT / "examples" / "data" / "metadata.tsv"
+    result = run_script("structure", tmp_path, "--vcf", vcf, "--meta", meta,
+                        "--out", tmp_path / "ex")
+    assert result.returncode != 0
+    assert "S05" in result.stdout + result.stderr
+    assert not [p for p in (tmp_path / "results").rglob("*") if p.is_file()]

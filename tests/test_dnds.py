@@ -10,7 +10,6 @@ from popgen.dnds import (
     count_site_types,
     get_codon_table,
 )
-from popgen.validators import validate_metadata
 
 
 # Mock Data
@@ -61,19 +60,6 @@ def test_ng86_counts():
     # Pos 1: f=0. Pos 2: f=0. Pos 3: f=3/3=1.
     # Total S_site = 1.
     assert abs(s - 1.0) < 0.01
-
-
-def test_validator_metadata(tmp_path):
-    f = tmp_path / "meta.tsv"
-    f.write_text("strain\tgroup\nA\t1\nB\t2")
-    assert validate_metadata(str(f))
-
-
-def test_validator_bad_metadata(tmp_path):
-    f = tmp_path / "bad.tsv"
-    f.write_text("id\tgroup\nA\t1")  # Wrong column
-    with pytest.raises(ValueError, match="strain"):
-        validate_metadata(str(f))
 
 
 def test_dnds_lowercase_matches_uppercase():

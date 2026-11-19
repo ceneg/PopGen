@@ -205,9 +205,9 @@ Lists the package and program versions used by each script (default
 
 ```
 scripts/      command-line entry points (thin wrappers, one per analysis)
-popgen/       the package: shared code for VCF reading, distances, logging
-              (utils.py), Nei-Gojobori counting (dnds.py), input checks
-              (validators.py); the analyses themselves in popgen/analyses/
+popgen/       the package: VCF and metadata reading (io.py), genotypes and
+              distances (genotypes.py), logging (runlog.py), Nei-Gojobori
+              counting (dnds.py); the analyses themselves in popgen/analyses/
 tests/        pytest suite (unit tests and end-to-end runs on the example data)
 tools/        PhiPack installer
 examples/     simulated example dataset and the script that generates it

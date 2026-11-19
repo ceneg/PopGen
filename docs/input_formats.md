@@ -12,14 +12,24 @@ Small examples of every format are in [`examples/data/`](../examples/data/)
 * Genotypes in the `GT` field. The scripts are written for **haploid** calls
   (`0`, `1`, `.`). Diploid calls are accepted by `diversity.py`,
   `structure.py`, `network.py` and `ld_decay.py` (alternate-allele counts
-  0/1/2); `selection.py` uses only the first allele of each call;
-  `recombination.py` refuses heterozygous calls.
+  0/1/2); `selection.py` uses only the first allele of each call (and logs
+  how many calls were heterozygous); `recombination.py` refuses heterozygous
+  calls.
+* One ploidy per VCF. A VCF that mixes haploid calls (read as `0/.`) with
+  diploid calls (`0/1`) is refused when the haploid calls are the majority
+  (re-call the samples with one ploidy, or split the VCF); otherwise the
+  haploid calls are treated as missing and counted in a warning.
 * Missing calls (`.`) are allowed. Distances (`diversity.py`, `structure.py`,
   `network.py`) use the sites called in both samples of a pair; PCA replaces
   missing calls by the per-variant mean; `ld_decay.py` drops variants with
   more than 10% missing calls and uses the samples called at both variants;
   `selection.py` turns a missing call into N, which removes that codon;
-  `recombination.py` writes it as N.
+  `recombination.py` writes it as N. Samples called at fewer than half of
+  the sites are listed in a warning; `diversity.py`, `structure.py` and
+  `network.py` stop if two samples share no called site (remove failed
+  samples from the VCF).
+* Records must be sorted by position within each contig (`bcftools sort`):
+  `ld_decay.py` and `recombination.py` stop otherwise; `selection.py` sorts.
 * Sample names must match the `strain` column of the metadata and, for
   `selection.py`, the tip names of the tree.
 * For `selection.py`, `CHROM` and `POS` must refer to the same reference FASTA
@@ -32,7 +42,10 @@ uncompressed VCF size (each script logs a warning when less is available).
 
 Tab-separated text with a header line. A column named `strain` holds the
 sample names; every other column is a categorical variable, and each one gets
-its own coloured plot.
+its own coloured plot. Every value is read as text, so numeric sample names
+(`101`, `007`) match the VCF exactly and a year stays `2019`. Spaces around
+column names and strain names are ignored. A file with only the `strain`
+column is valid (no coloured plots).
 
 ```
 strain	habitat	location	lineage
@@ -40,7 +53,9 @@ S01	soil	North	A
 S02	soil	South	A
 ```
 
-Samples missing from the metadata trigger a warning and have no category in the
+The scripts stop if the file cannot be read, has no `strain` column, has an
+empty or repeated strain name, or names none of the VCF samples. Samples
+missing from the metadata trigger one warning and have no category in the
 plots (`network.py` labels them "unknown"); metadata rows without a matching
 VCF sample are ignored.
 

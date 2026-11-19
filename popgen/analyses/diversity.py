@@ -16,10 +16,22 @@ import seaborn as sns
 from scipy.spatial.distance import squareform
 
 from popgen.cli import add_out_argument
-from popgen.io import OutputPaths, ensure_output_dirs, read_vcf, safe_names, write_table
+from popgen.genotypes import (
+    alt_allele_counts,
+    pairwise_differences,
+    report_call_rates,
+    require_shared_sites,
+)
+from popgen.io import (
+    OutputPaths,
+    ensure_output_dirs,
+    load_metadata,
+    read_vcf,
+    safe_names,
+    write_table,
+)
 from popgen.plotting import save_figure
 from popgen.runlog import setup_logging
-from popgen.utils import alt_allele_counts, load_metadata, pairwise_differences
 
 log = logging.getLogger("diversity")
 
@@ -32,19 +44,27 @@ SS_LABEL = "Pairwise differences (variant sites)"
 
 
 def compute_distance_matrices(
-    genotypes: np.ndarray,
+    genotypes: np.ndarray, samples=None
 ) -> tuple[np.ndarray, np.ndarray]:
     """
     Pairwise distances between samples over the variant sites called in both
     samples of a pair.
     Genotypes shape: (n_variants, n_samples, n_ploidy)
 
+    With ``samples``, samples with a low call rate are reported and the run
+    exits if a pair of samples shares no called site.
+
     Returns:
         tuple: (divergence, differences) as condensed arrays: the proportion
         of differing sites (normalised Hamming distance) and the number of
         differing sites (Hamming distance).
     """
-    diffs, compared = pairwise_differences(alt_allele_counts(genotypes).T)
+    counts = alt_allele_counts(genotypes).T  # (n_samples, n_variants)
+    if samples is not None:
+        report_call_rates(counts, samples)
+    diffs, compared = pairwise_differences(counts)
+    if samples is not None:
+        require_shared_sites(compared, samples)
     with np.errstate(invalid="ignore", divide="ignore"):
         dist = diffs / compared
     return dist, diffs
@@ -115,7 +135,7 @@ def main() -> None:
     file_names = safe_names(meta.columns)
 
     log.info("Computing distance matrices...")
-    divergence, differences = compute_distance_matrices(gt)
+    divergence, differences = compute_distance_matrices(gt, samples)
 
     for suffix, matrix, label in (
         ("nd", divergence, ND_LABEL),

@@ -7,7 +7,6 @@ smoothed curve falls to half of its maximum.
 import argparse
 import logging
 
-import allel
 import matplotlib
 
 matplotlib.use("Agg")
@@ -17,6 +16,7 @@ import pandas as pd
 import statsmodels.api as sm
 
 from popgen.cli import add_out_argument, fraction, non_negative_int, positive_int
+from popgen.genotypes import alt_allele_counts, contig_rows
 from popgen.io import ensure_output_dirs, read_vcf, write_table
 from popgen.plotting import save_figure
 from popgen.runlog import setup_logging
@@ -26,41 +26,24 @@ log = logging.getLogger("ld_decay")
 
 def filter_variants_min_samples(
     gt, min_samples: int = 2, missing_threshold: float = 0.1
-) -> tuple[np.ndarray, "allel.GenotypeArray | allel.HaplotypeArray"]:
+) -> tuple[np.ndarray, np.ndarray]:
     """
     Keep variants carried by at least ``min_samples`` samples and with at most
     ``missing_threshold`` missing calls.
 
-    Haploid VCFs (read by scikit-allel as ``0/.``) are converted to a
-    ``HaplotypeArray``.
-
     Returns:
-        tuple: (boolean keep mask, genotypes as Genotype- or HaplotypeArray).
+        tuple: (boolean keep mask, (n_variants, n_samples) allele counts from
+        ``genotypes.alt_allele_counts``, -1 = missing).
     """
-    if gt.ndim == 3 and gt.shape[2] > 1 and np.all(gt[:, :, 1] < 0):
-        log.info(
-            "Detected Haploid data parsed as Diploid (0/.). "
-            "Converting to HaplotypeArray."
-        )
-        gt = allel.HaplotypeArray(gt[:, :, 0])
-
-    if isinstance(gt, allel.GenotypeArray):
-        gn = gt.to_n_alt()
-        samples_with_alt = np.sum(gn > 0, axis=1)
-    else:
-        samples_with_alt = np.sum(gt > 0, axis=1)
-
-    pass_min_samples = samples_with_alt >= min_samples
-
-    is_missing = gt.is_missing()
-    missing_frac = np.mean(is_missing, axis=1)
-    pass_missing = missing_frac <= missing_threshold
+    gn = alt_allele_counts(gt)
+    pass_min_samples = (gn > 0).sum(axis=1) >= min_samples
+    pass_missing = (gn < 0).mean(axis=1) <= missing_threshold
 
     keep = pass_min_samples & pass_missing
     log.info(f"Filtering: Min Samples >= {min_samples}, Missing <= {missing_threshold}")
     log.info(f"Kept {np.sum(keep)} out of {len(keep)} variants.")
 
-    return keep, gt
+    return keep, gn
 
 
 def pairwise_r2(target, neighbors) -> np.ndarray:
@@ -108,13 +91,7 @@ def calculate_windowed_ld(
         tuple: (r2_sum, n_pairs) arrays indexed by bin.
     """
     log.info(f"Calculating pairwise LD (window={window_bp} bp)...")
-
-    if isinstance(gt, allel.GenotypeArray):
-        gn = gt.to_n_alt(fill=-1)
-    elif isinstance(gt, allel.HaplotypeArray):
-        gn = gt[:]
-    else:
-        gn = gt
+    gn = np.asarray(gt)
 
     n_bins = max(1, -(-int(window_bp) // bin_size))
     r2_sum = np.zeros(n_bins)
@@ -275,26 +252,25 @@ def main() -> None:
         args.vcf, fields=["samples", "calldata/GT", "variants/POS", "variants/CHROM"]
     )
 
-    keep, gt = filter_variants_min_samples(gt_array, args.min_samples)
-    gt = gt.compress(keep, axis=0)
+    keep, gn = filter_variants_min_samples(gt_array, args.min_samples)
+    gn = gn[keep]
     pos = callset["variants/POS"][keep]
     chrom = callset["variants/CHROM"][keep]
 
     if args.subset < 1.0:
-        n_keep = int(len(gt) * args.subset)
+        n_keep = int(len(gn) * args.subset)
         rng = np.random.default_rng(42)  # reproducible subset
-        indices = np.sort(rng.choice(len(gt), n_keep, replace=False))
-        gt = gt.take(indices, axis=0)
+        indices = np.sort(rng.choice(len(gn), n_keep, replace=False))
+        gn = gn[indices]
         pos = pos[indices]
         chrom = chrom[indices]
-        log.info(f"Subsampled to {len(gt)} variants.")
+        log.info(f"Subsampled to {len(gn)} variants.")
 
-    # Pairs are formed within each contig only
+    # Pairs are formed within each contig only (contigs in VCF order)
     r2_sum, n_pairs = None, None
-    for c in np.unique(chrom):
-        mask = chrom == c
-        c_gt = gt.compress(mask, axis=0)
-        c_pos = pos[mask]
+    for c, rows in contig_rows(chrom, pos, "error").items():
+        c_gt = gn[rows]
+        c_pos = pos[rows]
 
         if len(c_pos) < 2:
             continue

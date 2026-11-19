@@ -19,17 +19,23 @@ from networkx.algorithms.tree import minimum_spanning_tree as nx_mst
 from scipy.spatial.distance import squareform
 
 from popgen.cli import add_out_argument, non_negative_int, positive_float
+from popgen.genotypes import (
+    alt_allele_counts,
+    pairwise_differences,
+    report_call_rates,
+    require_shared_sites,
+)
 from popgen.io import (
     OutputPaths,
     atomic_write,
     ensure_output_dirs,
+    load_metadata,
     read_vcf,
     safe_name,
     safe_names,
 )
 from popgen.plotting import save_figure
 from popgen.runlog import setup_logging
-from popgen.utils import alt_allele_counts, load_metadata, pairwise_differences
 
 log = logging.getLogger("network")
 
@@ -148,7 +154,7 @@ def draw_msn(
     Args:
         G: Tree from ``build_msn``.
         cluster_map: {sample: genotype} from ``collapse_sequences``.
-        metadata: Metadata with a ``strain`` column.
+        metadata: Metadata indexed by strain.
         column: Metadata column to colour by.
         paths: From ``ensure_output_dirs``.
         layout_scale: networkx spring-layout ``k`` (``--distances``).
@@ -156,7 +162,6 @@ def draw_msn(
             (``--diameter``).
     """
     log.info(f"Drawing network for {column}...")
-    metadata = metadata.set_index("strain")
     label_data = metadata[column]
 
     pie_data = defaultdict(lambda: defaultdict(int))
@@ -260,6 +265,8 @@ def main() -> None:
     paths = ensure_output_dirs(args.out)
     samples, gt_array, _ = read_vcf(args.vcf, fields=["samples", "calldata/GT"])
     gt = alt_allele_counts(gt_array).T  # (n_samples, n_vars), -1 = missing
+    report_call_rates(gt, samples)
+    require_shared_sites(pairwise_differences(gt)[1], samples)
 
     cluster_map, clusters = collapse_sequences(samples, gt, args.contract)
 
@@ -278,17 +285,15 @@ def main() -> None:
     gnames, dist_matrix = compute_distance_matrix(clusters)
 
     if args.meta:
-        meta = load_metadata(args.meta, samples).reset_index()
-        safe_names(c for c in meta.columns if c != "strain")
+        meta = load_metadata(args.meta, samples)
+        safe_names(meta.columns)
     else:
-        meta = pd.DataFrame({"strain": samples, "group": ["default"] * len(samples)})
+        meta = pd.DataFrame({"group": "default"},
+                            index=pd.Index(samples, name="strain"))
 
     G = build_msn(gnames, dist_matrix)
 
     for column in meta.columns:
-        if column == "strain":
-            continue
-
         draw_msn(
             G,
             cluster_map,

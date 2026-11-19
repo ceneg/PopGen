@@ -23,16 +23,22 @@ from sklearn.decomposition import PCA
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
 
 from popgen.cli import add_out_argument
+from popgen.genotypes import (
+    alt_allele_counts,
+    pairwise_differences,
+    report_call_rates,
+    require_shared_sites,
+)
 from popgen.io import (
     atomic_write,
     ensure_output_dirs,
+    load_metadata,
     read_vcf,
     safe_names,
     write_table,
 )
 from popgen.plotting import save_figure
 from popgen.runlog import die, setup_logging
-from popgen.utils import alt_allele_counts, load_metadata, pairwise_differences
 
 log = logging.getLogger("structure")
 
@@ -336,6 +342,10 @@ def main() -> None:
 
     log.info("Performing PCA...")
     gt_matrix = alt_allele_counts(gt_array).T  # (n_samples, n_variants), -1 = missing
+    report_call_rates(gt_matrix, samples)
+    # Fail before any output if a pair of samples cannot be compared (the
+    # distances are computed again for the tree below; Phase 5 R6 joins them)
+    require_shared_sites(pairwise_differences(gt_matrix)[1], samples)
 
     n_components = min(10, *gt_matrix.shape)
     pca = PCA(n_components=n_components, random_state=42)

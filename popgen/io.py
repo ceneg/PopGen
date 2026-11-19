@@ -1,4 +1,5 @@
-"""Input and output: VCF reading, output paths, file names and atomic writes."""
+"""Input and output: VCF and metadata reading, output paths, file names and
+atomic writes."""
 
 import logging
 import re
@@ -9,6 +10,7 @@ from typing import IO, Iterator
 
 import allel
 import numpy as np
+import pandas as pd
 
 from popgen.runlog import check_memory, die
 
@@ -84,6 +86,63 @@ def read_vcf(vcf_file: str | Path, fields="*", require_gt: bool = True) -> tuple
         log.info(f"Loaded {len(samples)} samples.")
 
     return samples, gt, callset
+
+
+def _first(names, n: int = 5) -> str:
+    """The first ``n`` names, comma-separated, with "..." if there are more."""
+    names = [str(x) for x in names]
+    return ", ".join(names[:n]) + (", ..." if len(names) > n else "")
+
+
+def load_metadata(meta_path: str | Path, samples) -> pd.DataFrame:
+    """
+    Load the tab-separated metadata, one row per VCF sample.
+
+    Every value is read as a string (sample ``007`` stays ``007``, a year stays
+    ``"2019"``). Exits if the file cannot be read, has no ``strain`` column,
+    has empty or duplicated strains, or names none of the VCF samples.
+
+    Args:
+        meta_path: Metadata file with a ``strain`` column.
+        samples: VCF sample names, in VCF order.
+
+    Returns:
+        DataFrame indexed by ``strain``, exactly one row per sample in sample
+        order; samples without metadata (one warning) have all-NaN rows.
+        A file with only the ``strain`` column gives zero columns.
+    """
+    log.info(f"Loading metadata from {meta_path}...")
+    try:
+        meta = pd.read_csv(meta_path, sep="\t", dtype=str)
+    except Exception as e:
+        die(f"could not read metadata {meta_path}: {e}")
+    meta.columns = [str(c).strip() for c in meta.columns]
+
+    if "strain" not in meta.columns:
+        die("Metadata must have 'strain' column.")
+
+    strain = meta["strain"].str.strip()
+    if strain.isna().any() or (strain == "").any():
+        die(f"Metadata {meta_path} has rows with an empty 'strain' value.")
+    dup = strain[strain.duplicated()].unique()
+    if len(dup):
+        die(f"Metadata {meta_path} lists {len(dup)} strains more than once: "
+            f"{_first(dup)}.")
+    meta = meta.assign(strain=strain).set_index("strain")
+
+    samples = [str(s) for s in samples]
+    missing = [s for s in samples if s not in meta.index]
+    if len(missing) == len(samples):
+        die(f"None of the VCF samples is in the metadata {meta_path}. "
+            f"VCF samples: {_first(samples)}; metadata strains: "
+            f"{_first(meta.index)}.")
+    if missing:
+        log.warning(f"Warning: {len(missing)} samples missing from metadata "
+                    f"({_first(missing)}); their metadata values are empty.")
+
+    meta = meta.reindex(samples)
+    meta.index.name = "strain"
+    return meta
 
 
 @dataclass(frozen=True)

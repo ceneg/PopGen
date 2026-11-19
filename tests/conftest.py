@@ -39,3 +39,19 @@ def example_vcf_subset(path, n_samples):
         lines.append(line)
     Path(path).write_text("\n".join(lines) + "\n")
     return path
+
+
+def example_vcf_failed_sample(path, sample="S05"):
+    """Write examples/data/example.vcf with every call of ``sample`` set to '.'."""
+    lines, col = [], None
+    src = PROJECT_ROOT / "examples" / "data" / "example.vcf"
+    for line in src.read_text().splitlines():
+        if line.startswith("#CHROM"):
+            col = line.split("\t").index(sample)
+        elif not line.startswith("#"):
+            fields = line.split("\t")
+            fields[col] = "."
+            line = "\t".join(fields)
+        lines.append(line)
+    Path(path).write_text("\n".join(lines) + "\n")
+    return path

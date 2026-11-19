@@ -20,3 +20,10 @@ def test_distance_matrices_haploid_with_missing(div):
     # pairs (0,1), (0,2), (1,2); sample 2 is missing at variant 2
     np.testing.assert_array_equal(differences, [2, 1, 1])
     np.testing.assert_allclose(divergence, [2 / 3, 1 / 2, 1 / 2])
+
+
+def test_failed_sample_exits(div):
+    """B8: a sample without called sites stops the run."""
+    g = np.array([[[0, -1], [1, -1], [-1, -1]], [[1, -1], [0, -1], [-1, -1]]])
+    with pytest.raises(SystemExit):
+        div.compute_distance_matrices(g, ["a", "b", "c"])

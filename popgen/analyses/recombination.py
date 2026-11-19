@@ -52,6 +52,7 @@ import psutil
 
 from popgen.cli import add_out_argument, fraction, positive_float, positive_int
 from popgen.external import find_phi, phi_version
+from popgen.genotypes import contig_rows, haploid_alleles
 from popgen.io import atomic_write, ensure_output_dirs, read_vcf, safe_name
 from popgen.runlog import die, setup_logging
 
@@ -124,21 +125,6 @@ def run_scheduled(work, jobs, max_ram, fn):
         if isinstance(r, BaseException):
             raise r
     return [res[i] for i in range(len(work))]
-
-
-def haplotypes(gt):
-    """(n_vars, n_samples) allele matrix; -1 = missing. Refuses heterozygotes."""
-    g = np.asarray(gt)
-    if g.ndim == 3 and g.shape[2] > 1:
-        a, b = g[:, :, 0], g[:, :, 1]
-        het = (a >= 0) & (b >= 0) & (a != b)
-        if het.any():
-            die(
-                f"{int(het.sum())} heterozygous genotype calls. PhiPack "
-                "needs haplotypes; phase the data or use haploid calls."
-            )
-        return a
-    return g.reshape(g.shape[0], g.shape[1])
 
 
 def write_fasta(path, samples, h) -> None:
@@ -279,20 +265,21 @@ def main() -> None:
     paths = ensure_output_dirs(args.out)
     samples, gt, cs = read_vcf(args.vcf, fields=["samples", "calldata/GT",
                                                  "variants/CHROM", "variants/POS"])
-    h = haplotypes(gt)
+    h = haploid_alleles(gt, "error")
     chrom, pos = cs["variants/CHROM"], cs["variants/POS"]
     if (h < 0).any():
         log.warning(f"Warning: {int((h < 0).sum())} missing calls written as N.")
 
-    contigs = list(dict.fromkeys(chrom))  # VCF order
+    rows_by_contig = contig_rows(chrom, pos, "error")  # VCF order
+    contigs = list(rows_by_contig)
     step = max(1, math.ceil(1 / args.subset - 1e-9))
     if step > 1:
         log.info(f"--subset {args.subset}: one SNP in {step} per contig is used "
                  f"(fraction {1 / step:.3g}).")
     max_ram = args.max_ram * GB if args.max_ram else 0.8 * mem_available()
     work, too_big, order, n_split = [], [], {}, 0
-    for ci, c in enumerate(contigs):
-        rows = np.flatnonzero(chrom == c)[::step]
+    for ci, (c, rows) in enumerate(rows_by_contig.items()):
+        rows = rows[::step]
         if len(rows) < args.min_snps:
             continue
         segs = split_segments(h[rows], args.max_informative)

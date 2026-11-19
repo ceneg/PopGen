@@ -6,6 +6,7 @@ import pytest
 from popgen.io import (
     atomic_write,
     ensure_output_dirs,
+    load_metadata,
     read_vcf,
     safe_name,
     safe_names,
@@ -133,3 +134,76 @@ def test_write_table_matches_to_csv(tmp_path):
     write_table(df, tmp_path / "atomic.tsv", sep="\t")
     plain, atomic = tmp_path / "plain.tsv", tmp_path / "atomic.tsv"
     assert plain.read_bytes() == atomic.read_bytes()
+
+
+# --- Metadata (B1) ---
+
+def write_meta(tmp_path, text):
+    path = tmp_path / "meta.tsv"
+    path.write_text(text)
+    return str(path)
+
+
+def test_load_metadata_follows_vcf_order(tmp_path):
+    """T-META-6."""
+    meta = write_meta(tmp_path, "strain\tg\nB\tx\nZ\tz\nA\ty\n")
+    out = load_metadata(meta, ["A", "B"])
+    assert out.index.name == "strain"
+    assert list(out.index) == ["A", "B"]  # VCF order; surplus Z dropped
+    assert list(out["g"]) == ["y", "x"]
+
+
+def test_load_metadata_numeric_names_stay_strings(tmp_path):
+    """T-META-1."""
+    meta = write_meta(tmp_path, "strain\tyear\n101\t2019\n102\t2020\n")
+    out = load_metadata(meta, np.array(["101", "102"], dtype=object))
+    assert list(out.index) == ["101", "102"]
+    assert list(out["year"]) == ["2019", "2020"]
+
+
+def test_load_metadata_leading_zeros_and_whitespace(tmp_path):
+    meta = write_meta(tmp_path, " strain \tg \n007 \tx\n 8\ty\n")
+    out = load_metadata(meta, ["007", "8"])
+    assert list(out.columns) == ["g"]
+    assert list(out["g"]) == ["x", "y"]
+
+
+def test_load_metadata_no_overlap_exits(tmp_path, caplog):
+    """T-META-2."""
+    meta = write_meta(tmp_path, "strain\tyear\n101\t2019\n102\t2020\n")
+    with pytest.raises(SystemExit):
+        load_metadata(meta, ["X", "Y"])
+    assert "X, Y" in caplog.text and "101, 102" in caplog.text
+
+
+@pytest.mark.parametrize("text", [
+    "strain\tg\nA\tx\nA\ty\nB\tz\n",  # duplicate (T-META-3)
+    "strain\tg\nA\tx\n\ty\n",  # empty strain
+    "id\tg\nA\tx\n",  # no strain column
+])
+def test_load_metadata_invalid_exits(tmp_path, text):
+    with pytest.raises(SystemExit):
+        load_metadata(write_meta(tmp_path, text), ["A", "B"])
+
+
+def test_load_metadata_unreadable_exits(tmp_path):
+    with pytest.raises(SystemExit):
+        load_metadata(tmp_path / "missing.tsv", ["A"])
+
+
+def test_load_metadata_strain_only(tmp_path):
+    """T-META-4."""
+    meta = write_meta(tmp_path, "strain\nA\nB\n")
+    out = load_metadata(meta, ["A", "B"])
+    assert out.shape == (2, 0)
+    assert list(out.index) == ["A", "B"]
+
+
+def test_load_metadata_keeps_samples_without_metadata(tmp_path, caplog):
+    """T-META-5."""
+    meta = write_meta(tmp_path, "strain\tg\nA\tx\nB\ty\n")
+    with caplog.at_level("WARNING"):
+        out = load_metadata(meta, ["A", "B", "C"])
+    assert list(out.index) == ["A", "B", "C"]
+    assert out.loc["C"].isna().all()
+    assert len([r for r in caplog.records if r.levelname == "WARNING"]) == 1

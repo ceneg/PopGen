@@ -25,6 +25,7 @@ from scipy.spatial.distance import squareform
 
 from popgen.dnds import calculate_pairwise_dnds, jukes_cantor
 from popgen.cli import add_out_argument
+from popgen.genotypes import contig_rows, haploid_alleles
 from popgen.io import ensure_output_dirs, read_vcf, safe_name, write_table
 from popgen.plotting import save_figure
 from popgen.runlog import die, setup_logging
@@ -120,7 +121,8 @@ def reconstruct_genomes_from_vcf(vcf_path: str, ref_genome: dict[str, str]) -> t
 
     Only single-base REF/ALT variants are used (indels would shift the
     reading frame), and only those whose REF matches the reference FASTA.
-    Uses the first allele of each call (haploid data, or homozygous diploid).
+    Uses the first allele of each call (haploid data, or homozygous diploid;
+    heterozygous calls are counted in a warning).
 
     Returns: (variants_by_chrom, samples), where variants_by_chrom is
     {chrom: {"pos": 0-based sorted positions, "gt": (n, n_samples) allele
@@ -139,7 +141,7 @@ def reconstruct_genomes_from_vcf(vcf_path: str, ref_genome: dict[str, str]) -> t
         ],
     )
 
-    gt_hap = np.asarray(gt[:, :, 0])  # Haploid or first allele
+    gt_hap = haploid_alleles(gt, "first")  # Haploid, or first allele (warned)
 
     chroms = callset["variants/CHROM"]
     poss = callset["variants/POS"] - 1
@@ -158,12 +160,11 @@ def reconstruct_genomes_from_vcf(vcf_path: str, ref_genome: dict[str, str]) -> t
     variants_by_chrom = {}
     n_ref_mismatch = 0
     n_off_contig = 0
-    for chrom in dict.fromkeys(chroms):  # VCF order
-        idx = np.flatnonzero((chroms == chrom) & is_snp)
+    for chrom, idx in contig_rows(chroms, poss, "sort").items():  # VCF order
+        idx = idx[is_snp[idx]]  # sorted by position
         if chrom not in ref_genome:
             n_off_contig += len(idx)
             continue
-        idx = idx[np.argsort(poss[idx], kind="stable")]
         seq = ref_genome[chrom]
         in_range = poss[idx] < len(seq)
         n_off_contig += int((~in_range).sum())

@@ -89,3 +89,14 @@ def test_one_genotype_without_metadata(tmp_path):
     assert (tmp_path / "results" / "png" / "net.group.msn.png").stat().st_size > 0
     summary = (tmp_path / "results" / "net.genotype_summary.txt").read_text()
     assert summary == "#G1\na\nb\nc\n\n"
+
+
+def test_failed_sample_exits(tmp_path):
+    """T-NET-2 (B8): an all-missing sample no longer joins G1."""
+    from conftest import example_vcf_failed_sample, run_script
+
+    vcf = example_vcf_failed_sample(tmp_path / "failed.vcf", "S05")
+    result = run_script("network", tmp_path, "--vcf", vcf, "--out", tmp_path / "net")
+    assert result.returncode != 0
+    assert "S05" in result.stdout + result.stderr
+    assert not (tmp_path / "results" / "net.genotype_summary.txt").exists()
