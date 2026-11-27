@@ -1,5 +1,33 @@
 # Changelog
 
+## 1.11 (2026-11-27)
+
+Input checks and edge cases found in an audit of 1.10. Results of the
+example data and of valid inputs are unchanged.
+
+* All scripts: a VCF with duplicate sample names, or metadata with two
+  columns that have the same name after surrounding spaces are removed, is
+  refused (before: the duplicates were silently summed in the selection
+  summary, or the run crashed later).
+* All scripts: `--out` must be a prefix `DIR/NAME`; `.`, `..`, an empty
+  value or a trailing `/` are refused (before: `--out .` wrote into the
+  parent directory).
+* `recombination.py`: a contig whose name is only dots (`.`, `..`) gets the
+  file name `_` (before: its work directory resolved to the results
+  directory, which was then deleted).
+* `selection.py` **(results change for inconsistent input)**: a gene with a
+  CDS outside its FASTA contig, or with CDS on more than one contig or
+  strand, is skipped with a warning (before: a truncated or shifted coding
+  sequence was analysed). VCF records at position 0 are ignored.
+* `ld_decay.py`: positions are 64-bit, so a window that reaches past
+  2^31 bp no longer silently finds no pairs.
+* `structure.py`: when LDA fails on degenerate (for example clonal) clusters,
+  DAPC is skipped with a warning instead of stopping the run; ellipses of
+  collinear groups are drawn as lines instead of NaN.
+* `network.py`: `--meta` is checked before any output is written.
+* `diversity.py`: a VCF with fewer than 2 samples stops with a clear error
+  before any output.
+
 ## 1.10 (2026-11-19)
 
 Results of earlier versions differ where marked **(results change)**; re-run
