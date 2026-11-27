@@ -54,3 +54,22 @@ def test_heatmap_order_is_upgma_of_distances(div, tmp_path):
     # The colour-bar legend lists the categories, unknown last
     labels = [t.get_text() for t in g.fig.legends[0].get_texts()]
     assert labels == ["a", "b", "unknown"]
+
+
+def test_one_sample_exits_before_output(tmp_path):
+    from conftest import run_script
+
+    vcf = tmp_path / "one.vcf"
+    vcf.write_text(
+        "##fileformat=VCFv4.2\n"
+        '##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">\n'
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\ta\n"
+        "c1\t5\t.\tA\tC\t.\tPASS\t.\tGT\t1\n"
+    )
+    meta = tmp_path / "m.tsv"
+    meta.write_text("strain\tg\na\tx\n")
+    result = run_script("diversity", tmp_path, "--vcf", vcf, "--meta", meta,
+                        "--out", tmp_path / "div")
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "at least 2 samples" in result.stdout + result.stderr
+    assert not [p for p in (tmp_path / "results").rglob("*") if p.is_file()]

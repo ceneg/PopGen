@@ -142,3 +142,11 @@ def test_too_few_bins_skips_smoothing(ld, tmp_path, caplog):
                          ensure_output_dirs(tmp_path / "ld"))
     assert "Too few bins to smooth" in caplog.text
     assert (tmp_path / "results" / "ld.ld_decay.tsv").exists()
+
+
+def test_windowed_ld_int32_positions_do_not_overflow(ld):
+    """VCF POS is int32: pos + window above 2**31 - 1 must not wrap."""
+    gn = np.array([[0, 1, 0, 1], [0, 1, 0, 1], [1, 0, 1, 0]])
+    pos = np.array([100, 200, 300], dtype=np.int32)
+    s, n = ld.calculate_windowed_ld(gn, pos, 2**31 - 1, bin_size=2**30)
+    assert n.sum() == 3

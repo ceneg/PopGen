@@ -90,12 +90,25 @@ def test_ensure_output_dirs(tmp_path):
     assert paths.svg("pca") == tmp_path / "results" / "svg" / "run.pca.svg"
 
 
+@pytest.mark.parametrize("out", ["", ".", "./", "..", "sub/..", "my_run/"])
+def test_ensure_output_dirs_rejects_non_prefix(tmp_path, monkeypatch, out):
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(SystemExit):
+        ensure_output_dirs(out)
+    assert not (tmp_path.parent / "results").exists()
+
+
 @pytest.mark.parametrize("text, expected", [
     ("host/substrate", "host_substrate"),
     ("dN/dS", "dN_dS"),
     ("lineage", "lineage"),
     ("a b  c", "a_b_c"),
     ("/", "_"),
+    (".", "_"),
+    ("..", "_"),
+    ("/../", "_"),
+    (".._", "_"),
+    ("a.b", "a.b"),
 ])
 def test_safe_name(text, expected):
     """T-OUT-1 (B11)."""
@@ -207,3 +220,31 @@ def test_load_metadata_keeps_samples_without_metadata(tmp_path, caplog):
     assert list(out.index) == ["A", "B", "C"]
     assert out.loc["C"].isna().all()
     assert len([r for r in caplog.records if r.levelname == "WARNING"]) == 1
+
+
+def test_read_vcf_duplicate_samples_exits(tmp_path, caplog):
+    vcf = tmp_path / "dup.vcf"
+    vcf.write_text(VCF_HEADER.replace("\tA\tB\n", "\tA\tA\n")
+                   + "c1\t5\t.\tA\tC\t.\tPASS\t.\tGT\t0\t1\n")
+    for fields in (["samples"], ["samples", "calldata/GT"]):
+        with pytest.raises(SystemExit):
+            read_vcf(str(vcf), fields=fields)
+    assert "duplicate sample names: A" in caplog.text
+
+
+def test_read_vcf_default_fields_checks_memory(tmp_path, monkeypatch):
+    import popgen.io
+
+    calls = []
+    monkeypatch.setattr(popgen.io, "check_memory", lambda *a: calls.append(a))
+    vcf = tmp_path / "ok.vcf"
+    vcf.write_text(VCF_HEADER + "c1\t5\t.\tA\tC\t.\tPASS\t.\tGT\t0\t1\n")
+    read_vcf(str(vcf))
+    assert len(calls) == 1
+
+
+def test_load_metadata_duplicate_stripped_columns_exit(tmp_path):
+    meta = tmp_path / "m.tsv"
+    meta.write_text("strain\thabitat\t habitat \nA\tx\ty\n")
+    with pytest.raises(SystemExit):
+        load_metadata(meta, ["A"])

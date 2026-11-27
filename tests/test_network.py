@@ -109,3 +109,16 @@ def test_failed_sample_exits(tmp_path):
     assert result.returncode != 0
     assert "S05" in result.stdout + result.stderr
     assert not (tmp_path / "results" / "net.genotype_summary.txt").exists()
+
+
+def test_bad_metadata_exits_before_output(tmp_path):
+    """B11: metadata is validated before any work or output."""
+    from conftest import PROJECT_ROOT, run_script
+
+    vcf = PROJECT_ROOT / "examples" / "data" / "example.vcf"
+    meta = tmp_path / "m.tsv"
+    meta.write_text("strain\ta/b\ta b\nS01\tx\ty\n")
+    result = run_script("network", tmp_path, "--vcf", vcf, "--meta", meta,
+                        "--out", tmp_path / "net")
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert not [p for p in (tmp_path / "results").rglob("*") if p.is_file()]

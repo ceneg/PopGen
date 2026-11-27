@@ -92,6 +92,7 @@ def calculate_windowed_ld(
     """
     log.info(f"Calculating pairwise LD (window={window_bp} bp)...")
     gn = np.asarray(gt)
+    pos = np.asarray(pos, dtype=np.int64)  # VCF POS is int32: pos + window overflows
 
     n_bins = max(1, -(-int(window_bp) // bin_size))
     r2_sum = np.zeros(n_bins)

@@ -37,7 +37,7 @@ from popgen.plotting import (
     category_colors,
     save_figure,
 )
-from popgen.runlog import setup_logging
+from popgen.runlog import die, setup_logging
 
 log = logging.getLogger("diversity")
 
@@ -108,6 +108,8 @@ def main() -> None:
 
     paths = ensure_output_dirs(args.out)
     samples, gt, _ = read_vcf(args.vcf, fields=["samples", "calldata/GT"])
+    if len(samples) < 2:
+        die("diversity needs at least 2 samples.")
     meta = load_metadata(args.meta, samples)
     file_names = safe_names(meta.columns)
 

@@ -54,11 +54,11 @@ def read_vcf(vcf_file: str | Path, fields="*", require_gt: bool = True) -> tuple
         fields = list(fields)
         if any(f != "samples" for f in fields) and "variants/numalt" not in fields:
             fields.append("variants/numalt")
-        path = Path(vcf_file)
-        if fields != ["samples"] and path.exists():
-            ratio = GZIP_RATIO if path.name.endswith((".gz", ".bgz")) else 1
-            check_memory(VCF_MEMORY_FACTOR * ratio * path.stat().st_size,
-                         f"Reading {vcf_file}")
+    path = Path(vcf_file)
+    if fields != ["samples"] and path.exists():
+        ratio = GZIP_RATIO if path.name.endswith((".gz", ".bgz")) else 1
+        check_memory(VCF_MEMORY_FACTOR * ratio * path.stat().st_size,
+                     f"Reading {vcf_file}")
     try:
         callset = allel.read_vcf(vcf_file, fields=fields)
     except Exception as e:
@@ -71,6 +71,10 @@ def read_vcf(vcf_file: str | Path, fields="*", require_gt: bool = True) -> tuple
         ensure_biallelic(callset)
 
     samples = callset.get("samples", [])
+    names = [str(x) for x in samples]
+    dup = [x for x in dict.fromkeys(names) if names.count(x) > 1]
+    if dup:
+        die(f"{vcf_file} has duplicate sample names: {_first(dup)}.")
     gt = callset.get("calldata/GT")
     gt = allel.GenotypeArray(gt) if gt is not None else None
 
@@ -117,6 +121,9 @@ def load_metadata(meta_path: str | Path, samples) -> pd.DataFrame:
     except Exception as e:
         die(f"could not read metadata {meta_path}: {e}")
     meta.columns = [str(c).strip() for c in meta.columns]
+    dup = meta.columns[meta.columns.duplicated()].unique()
+    if len(dup):
+        die(f"Metadata {meta_path} has duplicate column names: {_first(dup)}.")
 
     if "strain" not in meta.columns:
         die("Metadata must have 'strain' column.")
@@ -173,6 +180,9 @@ def ensure_output_dirs(out_prefix: str | Path) -> OutputPaths:
     Returns:
         OutputPaths: The output file names of the prefix.
     """
+    raw = str(out_prefix)
+    if raw.endswith("/") or Path(raw).name in ("", ".", ".."):
+        die(f"--out must be a file prefix DIR/NAME, got '{raw}'.")
     out_path = Path(out_prefix).absolute()
     paths = OutputPaths(out_path.parent / "results", out_path.name)
     for d in (paths.results, paths.results / "png", paths.results / "svg"):
@@ -185,7 +195,8 @@ def safe_name(text) -> str:
     ``text`` made safe as a file-name component: runs of characters other than
     letters, digits, ``_``, ``.`` and ``-`` become ``_`` (``dN/dS`` -> ``dN_dS``).
     """
-    return re.sub(r"[^\w.-]+", "_", str(text)).strip("_") or "_"
+    s = re.sub(r"[^\w.-]+", "_", str(text)).strip("_")
+    return s if s.strip(".") else "_"  # never "", "." or ".."
 
 
 def safe_names(names) -> dict:

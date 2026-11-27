@@ -204,7 +204,7 @@ def reconstruct_genomes_from_vcf(vcf_path: str, ref_genome: dict[str, str]) -> t
             n_off_contig += len(idx)
             continue
         seq = ref_genome[chrom]
-        in_range = poss[idx] < len(seq)
+        in_range = (poss[idx] >= 0) & (poss[idx] < len(seq))
         n_off_contig += int((~in_range).sum())
         idx = idx[in_range]
         ref_base = np.array([seq[p] for p in poss[idx]], dtype="U1")
@@ -263,6 +263,12 @@ def build_gene_sequences(
         tuple: (reference CDS string, list of sample CDS strings). Missing
         calls become N, which removes that codon from the comparison.
     """
+    if len({(c["chrom"], c["strand"]) for c in cds_list}) > 1:
+        raise ValueError("CDS features on more than one contig or strand")
+    for c in cds_list:
+        if not 0 <= c["start"] < c["end"] <= len(ref_seq):
+            raise ValueError(f"CDS {c['start'] + 1}..{c['end']} outside contig "
+                             f"{c['chrom']} (length {len(ref_seq)})")
     full_ref = "".join(ref_seq[c["start"] : c["end"]] for c in cds_list)
     sample_seqs = [full_ref] * n_samples
 

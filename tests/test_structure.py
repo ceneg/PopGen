@@ -162,3 +162,29 @@ def test_coordinate_named_metadata_column(st, tmp_path):
                         "pca", "PCA")
     assert df["PC1"].tolist() == [0.0, 1.0, 2.0]
     assert (tmp_path / "results" / "png" / "t.pca.PC1.annotated.png").exists()
+
+
+def test_ellipse_of_collinear_group_is_finite(st):
+    import matplotlib.pyplot as plt
+
+    x, y = np.array([0.3, 0.3, 1.7]), np.array([-1.1, -1.1, 2.9])
+    fig, ax = plt.subplots()
+    st.add_confidence_ellipse(ax, x, y)
+    ell = ax.patches[0]
+    assert np.isfinite(ell.width) and np.isfinite(ell.height)
+    plt.close(fig)
+
+
+def test_dapc_on_clonal_clusters_warns_instead_of_crashing(st, tmp_path, caplog):
+    """ADR-6/B10: an LDA failure skips DAPC; it never stops the run."""
+    import pandas as pd
+    from sklearn.decomposition import PCA
+
+    x = np.repeat(np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]], float),
+                  3, axis=0)
+    pca = PCA(random_state=42).fit(x)
+    samples = [f"s{i}" for i in range(len(x))]
+    meta = pd.DataFrame(index=pd.Index(samples, name="strain"))
+    paths = ensure_output_dirs(tmp_path / "st")
+    assert st.run_dapc(pca, pca.transform(x), samples, meta, paths) is None
+    assert "DAPC skipped" in caplog.text

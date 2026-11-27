@@ -99,6 +99,7 @@ def add_confidence_ellipse(ax, x, y, color="blue") -> tuple[float, float]:
 
     if np.isnan(pearson):
         return mean_x, mean_y
+    pearson = float(np.clip(pearson, -1.0, 1.0))  # rounding on collinear groups
 
     ell_radius_x = np.sqrt(1 + pearson)
     ell_radius_y = np.sqrt(1 - pearson)
@@ -360,7 +361,8 @@ def run_dapc(pca, pca_coords, samples, meta, paths):
     """
     DAPC: k-means clusters on the leading PCs (k by BIC), then LDA; writes the
     coordinates and plots. Never exits: when DAPC is impossible (fewer than 2
-    PCs or fewer than 4 distinct samples) it logs a WARNING and returns None.
+    PCs, fewer than 4 distinct samples, or LDA fails on degenerate clusters)
+    it logs a WARNING and returns None.
 
     Returns:
         The cluster labels, or None if DAPC was skipped.
@@ -385,7 +387,11 @@ def run_dapc(pca, pca_coords, samples, meta, paths):
 
     # Shrinkage keeps the within-group covariance invertible for tight clusters
     lda = LinearDiscriminantAnalysis(n_components=2, solver="eigen", shrinkage="auto")
-    dapc_coords = lda.fit_transform(dapc_input, grp)
+    try:
+        dapc_coords = lda.fit_transform(dapc_input, grp)
+    except (np.linalg.LinAlgError, ValueError) as e:  # e.g. clonal clusters
+        log.warning(f"WARNING: DAPC skipped: LDA failed ({e}).")
+        return None
     plot_dapc(dapc_coords, samples, meta, paths, groups=grp)
     return grp
 

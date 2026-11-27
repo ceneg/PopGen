@@ -341,3 +341,13 @@ def test_draw_annotated_tree_keeps_topology(sel, tmp_path, monkeypatch):
     assert [t.get_text().strip() for t in tips] == [
         "a (dN: 0.50)", "b (dN: 0.012)", "c (dN: N/A)"]
     real_close(figs[0])
+
+
+@pytest.mark.parametrize("cds_list", [
+    [cds(5, 15, "-")],                       # runs past the contig end
+    [cds(0, 3), cds(4, 7, chrom="c2")],      # one gene on two contigs
+    [cds(0, 3), cds(4, 7, "-")],             # one gene on two strands
+])
+def test_build_rejects_inconsistent_cds(sel, cds_list):
+    with pytest.raises(ValueError):
+        sel.build_gene_sequences("ACGTACGTACGTA", cds_list, None, 1)

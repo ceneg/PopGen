@@ -231,6 +231,12 @@ def main() -> None:
 
     paths = ensure_output_dirs(args.out)
     samples, gt_array, _ = read_vcf(args.vcf, fields=["samples", "calldata/GT"])
+    if args.meta:  # validated before any work or output (B11)
+        meta = load_metadata(args.meta, samples)
+        safe_names(meta.columns)
+    else:
+        meta = pd.DataFrame({"group": "default"},
+                            index=pd.Index(samples, name="strain"))
     gt = alt_allele_counts(gt_array).T  # (n_samples, n_vars), -1 = missing
     report_call_rates(gt, samples)
     _, diffs, compared = distance_matrices(gt)
@@ -253,13 +259,6 @@ def main() -> None:
 
     gnames = [f"G{i + 1}" for i in range(len(reps))]
     dist_matrix = diff_square[np.ix_(reps, reps)]
-
-    if args.meta:
-        meta = load_metadata(args.meta, samples)
-        safe_names(meta.columns)
-    else:
-        meta = pd.DataFrame({"group": "default"},
-                            index=pd.Index(samples, name="strain"))
 
     G = build_msn(gnames, dist_matrix)
 
